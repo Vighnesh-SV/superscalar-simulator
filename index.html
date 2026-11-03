@@ -1,0 +1,1067 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Superscalar Scheduling Simulator</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=JetBrains+Mono:wght@400;600;700&display=swap">
+<style>
+/* Layout: lab-bench console. Config rail on the left, a wide pipeline "board" on the right,
+   instructions travel as chips through IF → ID → IS → EX lanes → WB. */
+:root{
+  --bg:#eef1f4; --surface:#ffffff; --surface-2:#f6f8fa; --ink:#121820; --muted:#5a6573; --line:#d6dce4;
+  --accent:#5b45d6; --accent-ink:#ffffff;
+  --u-alu:#2a78d6; --u-mul:#eb6834; --u-mem:#1baf7a; --u-br:#eda100;
+  --warn:#b7700f; --bad:#d23a3a; --good:#1d8a4b;
+  --raw:#e34948; --war:#6250d6; --waw:#c2457a;
+  --f-display:"Archivo", "Arial Narrow", system-ui, sans-serif;
+  --f-body:"Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono:"JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --r:10px;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0e1116; --surface:#161b22; --surface-2:#1c222b; --ink:#e7ebf0; --muted:#97a1ae; --line:#2b333e;
+  --accent:#9085e9; --accent-ink:#0e1116;
+  --u-alu:#3987e5; --u-mul:#d95926; --u-mem:#199e70; --u-br:#c98500;
+  --warn:#e3a443; --bad:#ef6a6a; --good:#4cc282;
+  --raw:#e66767; --war:#9085e9; --waw:#e07aa4; color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0e1116; --surface:#161b22; --surface-2:#1c222b; --ink:#e7ebf0; --muted:#97a1ae; --line:#2b333e;
+  --accent:#9085e9; --accent-ink:#0e1116;
+  --u-alu:#3987e5; --u-mul:#d95926; --u-mem:#199e70; --u-br:#c98500;
+  --warn:#e3a443; --bad:#ef6a6a; --good:#4cc282;
+  --raw:#e66767; --war:#9085e9; --waw:#e07aa4; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:14px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 32px}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+button,select,input,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--f-mono)}
+h1,h2,h3{font-family:var(--f-display);text-wrap:balance;margin:0}
+
+/* header */
+.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 24px;padding-block:20px 14px}
+.top h1{font-size:clamp(22px,3.4vw,34px);font-weight:800;font-stretch:118%;letter-spacing:-.01em;line-height:1.05}
+.top .sub{color:var(--muted);margin-top:4px;font-size:13px}
+.top .sub b{color:var(--ink);font-weight:600}
+.syll{display:flex;gap:6px;flex-wrap:wrap}
+.tag{font-family:var(--f-mono);font-size:11px;padding:3px 8px;border:1px solid var(--line);border-radius:999px;color:var(--muted);background:var(--surface)}
+.tag.on{border-color:var(--accent);color:var(--accent)}
+
+/* transport */
+.transport{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding-block:8px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;border-bottom:1px solid var(--line);margin-bottom:14px}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:7px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn svg{width:14px;height:14px;fill:currentColor}
+.cyc{font-family:var(--f-mono);font-size:13px;min-width:130px}
+.cyc b{font-size:20px;font-family:var(--f-display);font-stretch:110%}
+.scrub{flex:1 1 200px;min-width:140px;accent-color:var(--accent)}
+.speed{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.speed input{width:90px;accent-color:var(--accent)}
+
+/* main grid */
+.main{display:grid;grid-template-columns:300px minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:900px){.main{grid-template-columns:minmax(0,1fr)}}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px}
+.rail{display:flex;flex-direction:column;gap:12px}
+.rail h3{font-size:12px;text-transform:uppercase;letter-spacing:.08em;font-stretch:110%;color:var(--muted);margin-bottom:10px;font-weight:700}
+textarea#src{width:100%;min-height:210px;resize:vertical;font-family:var(--f-mono);font-size:12px;line-height:1.55;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px;white-space:pre;overflow:auto;tab-size:4}
+select{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:6px 8px;width:100%}
+.row{display:flex;gap:8px;align-items:center}
+.row+.row{margin-top:8px}
+.err{color:var(--bad);font-size:12px;margin-top:6px;font-family:var(--f-mono);white-space:pre-wrap}
+.hint{color:var(--muted);font-size:12px}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{flex:1;border:0;background:var(--surface-2);padding:6px 0;cursor:pointer;font-family:var(--f-mono);font-weight:600}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.grid2{display:grid;grid-template-columns:1fr auto auto;gap:6px 8px;align-items:center;font-size:13px}
+.grid2 .h{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.num{width:54px;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-family:var(--f-mono);text-align:center}
+.usw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.sw{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line)}
+.sw:first-of-type{border-top:0;padding-top:0}
+.sw input{appearance:none;width:34px;height:20px;border-radius:999px;background:var(--line);position:relative;flex:none;cursor:pointer;margin-top:1px;transition:background .15s}
+.sw input::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--surface);transition:left .15s}
+.sw input:checked{background:var(--accent)}
+.sw input:checked::after{left:16px}
+.sw label{cursor:pointer}
+.sw b{display:block;font-size:13px}
+.sw span{font-size:12px;color:var(--muted)}
+.presets{display:flex;gap:6px;margin-top:10px}
+.presets .btn{flex:1;justify-content:center;font-size:12px;padding:6px}
+
+/* tabs */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:12px;overflow-x:auto}
+.tabs button{border:0;background:none;padding:9px 12px;cursor:pointer;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.view{display:flex;flex-direction:column;gap:14px;min-width:0}
+
+/* stat strip */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:9px 12px}
+.stat .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.stat .v{font-family:var(--f-display);font-stretch:112%;font-weight:700;font-size:22px;font-variant-numeric:tabular-nums}
+.stat .v small{font-size:12px;color:var(--muted);font-weight:500;font-family:var(--f-body);font-stretch:100%}
+
+/* pipeline board */
+.boardwrap{overflow-x:auto;border-radius:var(--r)}
+.board{position:relative;display:grid;grid-template-columns:repeat(3,minmax(140px,1fr)) minmax(230px,1.5fr) minmax(150px,1fr) 104px;gap:8px;min-width:1000px;padding:10px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r)}
+.stage{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.stage header{display:flex;align-items:baseline;gap:8px;padding-bottom:4px;border-bottom:1px dashed var(--line)}
+.stage header b{font-family:var(--f-display);font-stretch:125%;font-weight:800;font-size:18px;letter-spacing:.02em}
+.stage header span{font-size:11px;color:var(--muted);line-height:1.2}
+.slots{display:flex;flex-direction:column;gap:6px;min-height:40px}
+.ph{border:1.5px dashed var(--line);border-radius:7px;height:52px;display:grid;place-items:center;color:var(--muted);font-size:10.5px;font-family:var(--f-mono);opacity:.75}
+.lane{display:grid;grid-template-columns:44px minmax(0,1fr);gap:6px;align-items:start;padding:4px 0;border-top:1px solid var(--line)}
+.lane:first-of-type{border-top:0}
+.lane .ln{font-family:var(--f-mono);font-size:11px;font-weight:700;padding-top:4px}
+.lane .slots{min-height:52px}
+.sub-h{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:4px}
+.retired{display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center}
+.retired .big{font-family:var(--f-display);font-stretch:120%;font-size:30px;font-weight:800;color:var(--good);font-variant-numeric:tabular-nums}
+.retired .lst{display:flex;flex-direction:column;gap:3px;width:100%}
+.retired .lst div{font-family:var(--f-mono);font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fx{position:absolute;inset:0;pointer-events:none;overflow:visible}
+
+.chip{--u:var(--u-alu);position:relative;border:1px solid color-mix(in oklab,var(--u) 55%,var(--line));background:color-mix(in oklab,var(--u) 13%,var(--surface));border-radius:7px;padding:5px 7px 6px;font-family:var(--f-mono);font-size:11px;line-height:1.3;cursor:pointer;min-height:52px;overflow:hidden}
+.chip.t-ALU{--u:var(--u-alu)} .chip.t-MUL{--u:var(--u-mul)} .chip.t-MEM{--u:var(--u-mem)} .chip.t-BR{--u:var(--u-br)}
+.chip .ct{display:flex;align-items:center;gap:5px}
+.chip .ct b{font-size:12px}
+.chip .ut{font-size:9px;font-weight:700;padding:0 4px;border-radius:3px;background:var(--u);color:#fff;letter-spacing:.03em}
+.chip .pc{color:var(--muted);margin-left:auto;font-size:10px}
+.chip .op{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.chip .nt{font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip .bar{position:absolute;left:0;bottom:0;height:3px;background:var(--u);transition:width .3s}
+.chip.stall{border-color:var(--warn);box-shadow:inset 0 0 0 1px var(--warn)}
+.chip.stall .nt{color:var(--warn);font-weight:700}
+.chip.spec{border-style:dashed}
+.chip.spec .op::after{content:" ⟂spec";color:var(--muted);font-weight:400;font-size:9.5px}
+.chip.wb{border-color:var(--good);box-shadow:inset 0 0 0 1px var(--good)}
+.chip.wb .nt{color:var(--good);font-weight:700}
+.chip.rob{opacity:.75}
+.chip.sel{outline:2px solid var(--ink);outline-offset:1px}
+.chip.flushing{border-color:var(--bad);background:color-mix(in oklab,var(--bad) 22%,var(--surface))}
+.chip.flushing::after{content:"FLUSHED";position:absolute;inset:0;display:grid;place-items:center;font-weight:800;color:var(--bad);letter-spacing:.1em;font-size:12px;background:color-mix(in oklab,var(--surface) 55%,transparent)}
+
+.banner{display:flex;gap:10px;align-items:center;padding:9px 12px;border-radius:8px;border:1px solid var(--bad);background:color-mix(in oklab,var(--bad) 10%,var(--surface));font-size:13px}
+.banner b{color:var(--bad)}
+.banner.ok{border-color:var(--good);background:color-mix(in oklab,var(--good) 10%,var(--surface))}
+.banner.ok b{color:var(--good)}
+
+.cols{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:14px}
+@media (max-width:1100px){.cols{grid-template-columns:minmax(0,1fr)}}
+.panel h2{font-size:15px;font-stretch:112%;font-weight:700;margin-bottom:10px}
+.log{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;max-height:300px;overflow:auto}
+.log li{display:grid;grid-template-columns:62px minmax(0,1fr);gap:8px;font-size:12.5px;align-items:baseline}
+.log .k{font-family:var(--f-mono);font-size:10px;font-weight:700;text-transform:uppercase;padding:1px 5px;border-radius:4px;text-align:center;border:1px solid var(--line);color:var(--muted)}
+.log .k.stall{color:var(--warn);border-color:var(--warn)}
+.log .k.flush{color:var(--bad);border-color:var(--bad)}
+.log .k.commit{color:var(--good);border-color:var(--good)}
+.log .k.issue{color:var(--accent);border-color:var(--accent)}
+.log .k.branch{color:var(--u-br);border-color:var(--u-br)}
+.regs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
+.reg{border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-family:var(--f-mono);font-size:11px;background:var(--surface-2);min-width:0}
+.reg .rn{font-weight:700}
+.reg .rv{float:right;font-variant-numeric:tabular-nums}
+.reg .rp{display:block;font-size:9.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:13px}
+.reg.busy{border-color:var(--warn)}
+.reg.busy .rp{color:var(--warn)}
+.reg.flash{background:color-mix(in oklab,var(--good) 18%,var(--surface-2))}
+.pred{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+.pred .pr{display:flex;align-items:center;gap:8px;font-family:var(--f-mono);font-size:11px}
+.fsm{display:flex;gap:2px}
+.fsm span{width:22px;height:18px;border:1px solid var(--line);border-radius:3px;display:grid;place-items:center;font-size:9px;color:var(--muted)}
+.fsm span.on{background:var(--u-br);color:#000;border-color:var(--u-br);font-weight:700}
+.insp{font-size:12.5px}
+.insp .mono{font-size:12px}
+.insp dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 10px;margin:8px 0 0}
+.insp dt{color:var(--muted)}
+.insp dd{margin:0}
+.legend{display:flex;flex-wrap:wrap;gap:8px 14px;font-size:12px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{width:12px;height:12px;border-radius:3px;display:inline-block}
+
+/* timing diagram */
+.tdwrap{overflow:auto;max-height:620px;border:1px solid var(--line);border-radius:var(--r);background:var(--surface)}
+table.td{border-collapse:separate;border-spacing:0;font-family:var(--f-mono);font-size:10.5px}
+.td th,.td td{height:24px;min-width:30px;text-align:center;padding:0 2px;border-right:1px solid color-mix(in oklab,var(--line) 60%,transparent);border-bottom:1px solid color-mix(in oklab,var(--line) 60%,transparent)}
+.td thead th{position:sticky;top:0;background:var(--surface-2);z-index:2;cursor:pointer;font-weight:600}
+.td th.ins{position:sticky;left:0;background:var(--surface);z-index:1;text-align:left;padding:0 8px;min-width:190px;white-space:nowrap;font-weight:400}
+.td thead th.ins{z-index:3;background:var(--surface-2)}
+.td th.ins.fl{color:var(--bad);text-decoration:line-through}
+.td td.s-IF{background:color-mix(in oklab,var(--muted) 14%,var(--surface))}
+.td td.s-ID{background:color-mix(in oklab,var(--muted) 24%,var(--surface))}
+.td td.s-IS{background:color-mix(in oklab,var(--accent) 16%,var(--surface))}
+.td td.s-ST{background:repeating-linear-gradient(135deg,color-mix(in oklab,var(--warn) 28%,var(--surface)) 0 4px,color-mix(in oklab,var(--warn) 12%,var(--surface)) 4px 8px);color:var(--warn);font-weight:700}
+.td td.s-EX{color:#fff;font-weight:700}
+.td td.s-RB{background:color-mix(in oklab,var(--good) 10%,var(--surface));color:var(--muted)}
+.td td.s-WB{background:var(--good);color:#fff;font-weight:700}
+.td td.s-FL{background:color-mix(in oklab,var(--bad) 22%,var(--surface));color:var(--bad);font-weight:800}
+.td .cur{box-shadow:inset 2px 0 0 var(--ink),inset -2px 0 0 var(--ink)}
+.td thead th.cur{background:var(--ink);color:var(--surface)}
+
+/* hazards */
+.arcwrap{overflow-x:auto}
+.arcwrap svg{display:block;min-width:560px;width:100%;height:auto}
+.arcwrap text{fill:var(--ink);font-family:var(--f-mono);font-size:12px}
+.arcwrap text.m{fill:var(--muted);font-size:10.5px}
+table.hz{width:100%;border-collapse:collapse;font-size:12.5px}
+.hz th{text-align:left;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 8px;border-bottom:1px solid var(--line);font-weight:600}
+.hz td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+.hz .ty{font-family:var(--f-mono);font-weight:700;font-size:11px;padding:2px 6px;border-radius:4px;border:1.5px solid;white-space:nowrap}
+.ty.RAW{color:var(--raw)} .ty.WAR{color:var(--war)} .ty.WAW{color:var(--waw)} .ty.CTRL{color:var(--u-br)} .ty.STRUCT{color:var(--u-mul)}
+.fix{display:inline-block;font-size:11px;padding:1px 6px;border-radius:999px;margin-top:3px;font-weight:600}
+.fix.y{background:color-mix(in oklab,var(--good) 16%,var(--surface));color:var(--good)}
+.fix.n{background:color-mix(in oklab,var(--warn) 16%,var(--surface));color:var(--warn)}
+.tblwrap{overflow-x:auto}
+.sols{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
+.sol{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--surface-2)}
+.sol h3{font-size:13.5px;font-stretch:110%;display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.sol p{margin:6px 0 0;font-size:12.5px;color:var(--muted)}
+.sol .st{font-family:var(--f-mono);font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:999px;white-space:nowrap}
+.sol .st.on{background:var(--good);color:#fff} .sol .st.off{background:var(--line);color:var(--muted)}
+
+/* bars */
+.bars{display:flex;flex-direction:column;gap:7px}
+.bar-r{display:grid;grid-template-columns:150px minmax(0,1fr) 120px;gap:10px;align-items:center;font-size:12.5px}
+@media (max-width:560px){.bar-r{grid-template-columns:96px minmax(0,1fr) 84px;font-size:11.5px}}
+.bar-r .lb{color:var(--ink);text-align:right}
+.bar-r .tr{height:18px;position:relative;background:color-mix(in oklab,var(--line) 45%,transparent);border-radius:4px}
+.bar-r .fl{height:100%;border-radius:0 4px 4px 0;background:color-mix(in oklab,var(--accent) 55%,var(--surface));min-width:2px}
+.bar-r.cur .fl{background:var(--accent)}
+.bar-r .vl{font-family:var(--f-mono);font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.bar-r.cur .lb,.bar-r.cur .vl{font-weight:700;color:var(--ink)}
+.insight{font-size:13.5px;max-width:75ch;margin:0}
+.insight b{color:var(--accent)}
+#tip{position:fixed;pointer-events:none;background:var(--ink);color:var(--surface);font-size:12px;padding:6px 9px;border-radius:6px;max-width:300px;z-index:50;opacity:0;transition:opacity .1s;font-family:var(--f-body)}
+#tip.on{opacity:1}
+table.cmp{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-numeric:tabular-nums}
+.cmp th,.cmp td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right}
+.cmp th:first-child,.cmp td:first-child{text-align:left}
+.cmp th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.cmp tr.cur td{font-weight:700}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+
+<header class="top">
+  <div>
+    <h1>Superscalar Scheduling Simulator</h1>
+    <div class="sub">Multi-issue pipeline with live hazard detection and resolution · <b>Unit 3: Pipeline Processing</b></div>
+  </div>
+  <div class="syll" aria-label="Syllabus topics covered">
+    <span class="tag on">Superscalar operation</span>
+    <span class="tag on">Data, control &amp; structural hazards</span>
+    <span class="tag on">Branch prediction</span>
+    <span class="tag">Pipeline performance</span>
+  </div>
+</header>
+
+<div class="transport" role="toolbar" aria-label="Playback">
+  <button class="btn" id="bReset" title="Back to cycle 0 (Home)"><svg viewBox="0 0 16 16"><path d="M3 2h2v12H3zM14 2v12L6 8z"/></svg>Reset</button>
+  <button class="btn" id="bBack" title="Previous cycle (←)"><svg viewBox="0 0 16 16"><path d="M11 2v12L3 8z"/></svg>Back</button>
+  <button class="btn primary" id="bPlay" title="Play / pause (Space)"><svg viewBox="0 0 16 16" id="playIco"><path d="M4 2v12l10-6z"/></svg><span id="playTxt">Play</span></button>
+  <button class="btn" id="bStep" title="Next cycle (→)"><svg viewBox="0 0 16 16"><path d="M5 2v12l8-6z"/></svg>Step</button>
+  <div class="cyc">Cycle <b id="cNow">0</b> / <span id="cTot">0</span></div>
+  <input type="range" class="scrub" id="scrub" min="0" max="0" value="0" aria-label="Jump to cycle">
+  <label class="speed" for="speed">Speed <input type="range" id="speed" min="1" max="10" value="4"></label>
+</div>
+
+<div class="main">
+  <aside class="rail">
+    <section class="panel">
+      <h3>Program</h3>
+      <select id="sample" aria-label="Sample program"></select>
+      <textarea id="src" spellcheck="false" aria-label="Assembly program"></textarea>
+      <div class="row" style="margin-top:8px"><button class="btn primary" id="bRun">Run program</button><span class="hint">Ctrl+Enter</span></div>
+      <div class="err" id="err" hidden></div>
+      <p class="hint" style="margin:8px 0 0">ADD SUB AND OR XOR SLT · ADDI SUBI ANDI ORI · MUL DIV · LW/SW Rx, off(Ry) · BEQ BNE BLT · J · NOP · HALT. Registers R0–R15 (R0 is always 0). Memory word <span class="mono">k</span> starts as k+1.</p>
+    </section>
+
+    <section class="panel">
+      <h3>Processor</h3>
+      <div class="hint" style="margin-bottom:6px">Issue width (instructions per cycle)</div>
+      <div class="seg" id="width"><button data-w="1">1</button><button data-w="2">2</button><button data-w="4">4</button><button data-w="8">8</button></div>
+      <div class="grid2" style="margin-top:12px">
+        <span class="h">Unit</span><span class="h">Count</span><span class="h">Latency</span>
+        <span><i class="usw" style="background:var(--u-alu)"></i>ALU</span><input class="num" type="number" min="1" max="4" id="nALU"><input class="num" type="number" min="1" max="4" id="lALU">
+        <span><i class="usw" style="background:var(--u-mul)"></i>Multiplier</span><input class="num" type="number" min="1" max="4" id="nMUL"><input class="num" type="number" min="1" max="10" id="lMUL">
+        <span><i class="usw" style="background:var(--u-mem)"></i>Load/Store</span><input class="num" type="number" min="1" max="4" id="nMEM"><input class="num" type="number" min="1" max="8" id="lMEM">
+        <span><i class="usw" style="background:var(--u-br)"></i>Branch</span><input class="num" type="number" min="1" max="2" id="nBR"><span class="hint" style="text-align:center">1</span>
+      </div>
+      <div class="row" style="margin-top:10px"><span style="flex:1">Issue window (reservation stations)</span><input class="num" type="number" min="2" max="32" id="win"></div>
+    </section>
+
+    <section class="panel">
+      <h3>Hazard solutions</h3>
+      <div class="sw"><input type="checkbox" id="oFwd"><label for="oFwd"><b>Data forwarding</b><span>Result goes straight from EX to the waiting instruction. Fixes RAW delay.</span></label></div>
+      <div class="sw"><input type="checkbox" id="oRen"><label for="oRen"><b>Register renaming</b><span>Each write gets a fresh physical register. Removes WAR and WAW.</span></label></div>
+      <div class="sw"><input type="checkbox" id="oOoo"><label for="oOoo"><b>Out-of-order issue</b><span>Ready instructions overtake stalled older ones (dynamic scheduling).</span></label></div>
+      <div class="sw"><input type="checkbox" id="oPipe"><label for="oPipe"><b>Pipelined units</b><span>A busy multi-cycle unit can accept a new op every cycle. Eases structural hazards.</span></label></div>
+      <div style="border-top:1px solid var(--line);padding-top:8px">
+        <label for="oBp" style="font-weight:700;font-size:13px">Control hazards (branches)</label>
+        <select id="oBp" style="margin-top:6px">
+          <option value="stall">Stall fetch until branch resolves</option>
+          <option value="nt">Static: predict not-taken + flush</option>
+          <option value="2bit">Dynamic: 2-bit predictor + flush</option>
+        </select>
+      </div>
+      <div class="presets"><button class="btn" id="pNone">No solutions</button><button class="btn" id="pAll">All solutions</button></div>
+    </section>
+  </aside>
+
+  <main style="min-width:0">
+    <div class="tabs" role="tablist">
+      <button role="tab" data-v="live" aria-selected="true">Live pipeline</button>
+      <button role="tab" data-v="timing" aria-selected="false">Timing diagram</button>
+      <button role="tab" data-v="hazards" aria-selected="false">Hazards &amp; dependencies</button>
+      <button role="tab" data-v="perf" aria-selected="false">Performance</button>
+    </div>
+
+    <!-- LIVE -->
+    <section class="view" id="v-live">
+      <div class="stats" id="liveStats"></div>
+      <div id="banner"></div>
+      <div class="boardwrap"><div class="board" id="board"></div></div>
+      <div class="legend">
+        <span><i style="background:var(--u-alu)"></i>ALU op</span><span><i style="background:var(--u-mul)"></i>Multiply</span><span><i style="background:var(--u-mem)"></i>Load/Store</span><span><i style="background:var(--u-br)"></i>Branch</span>
+        <span><i style="border:2px solid var(--warn)"></i>Stalled (reason shown)</span><span><i style="border:2px dashed var(--muted)"></i>Speculative (after unresolved branch)</span><span><i style="border:2px solid var(--good)"></i>Writing back</span><span><i style="background:var(--bad)"></i>Flushed</span>
+      </div>
+      <div class="cols">
+        <section class="panel"><h2 id="logH">What happened this cycle</h2><ul class="log" id="log"></ul></section>
+        <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+          <section class="panel insp" id="insp"><h2>Instruction inspector</h2><p class="hint" style="margin:0">Click any instruction chip to follow it through the pipeline.</p></section>
+          <section class="panel"><h2>Register file</h2><div class="regs" id="regs"></div><div class="pred" id="pred"></div></section>
+        </div>
+      </div>
+    </section>
+
+    <!-- TIMING -->
+    <section class="view" id="v-timing" hidden>
+      <p class="insight">Space-time diagram: one row per instruction as it was fetched, one column per clock cycle. Click a cycle number to jump there. Striped cells are stall cycles. Struck-out rows were fetched down a mispredicted path and flushed.</p>
+      <div class="legend">
+        <span><i style="background:color-mix(in oklab,var(--muted) 14%,var(--surface));border:1px solid var(--line)"></i>IF fetch</span>
+        <span><i style="background:color-mix(in oklab,var(--muted) 24%,var(--surface));border:1px solid var(--line)"></i>ID decode</span>
+        <span><i style="background:color-mix(in oklab,var(--accent) 16%,var(--surface));border:1px solid var(--line)"></i>IS issue queue</span>
+        <span><i style="background:var(--warn)"></i>st = stall</span>
+        <span><i style="background:var(--u-alu)"></i>E1, E2… execute (unit colour)</span>
+        <span><i style="background:color-mix(in oklab,var(--good) 20%,var(--surface))"></i>·· done, waiting to commit</span>
+        <span><i style="background:var(--good)"></i>WB write-back</span>
+        <span><i style="background:var(--bad)"></i>✕ flushed</span>
+      </div>
+      <div class="tdwrap" id="tdwrap"></div>
+    </section>
+
+    <!-- HAZARDS -->
+    <section class="view" id="v-hazards" hidden>
+      <section class="panel">
+        <h2>Dependency graph</h2>
+        <p class="hint" style="margin:0 0 8px">Arrows go from the earlier instruction to the later one. True dependencies (RAW) are on the right. False dependencies (WAR and WAW), which renaming can remove, are on the left.</p>
+        <div class="legend" style="margin-bottom:6px"><span><i style="background:var(--raw)"></i>RAW, solid</span><span><i style="background:var(--war)"></i>WAR, dashed</span><span><i style="background:var(--waw)"></i>WAW, dotted</span></div>
+        <div class="arcwrap" id="arcs"></div>
+      </section>
+      <section class="panel">
+        <h2>Measured stall cycles by cause</h2>
+        <p class="hint" style="margin:0 0 10px">One stall = one instruction waiting one cycle in the issue queue (fetch stalls count whole cycles). Toggle solutions on the left and watch these bars shrink.</p>
+        <div class="bars" id="stallBars"></div>
+      </section>
+      <section class="panel">
+        <h2>Hazards found in the program</h2>
+        <div class="tblwrap"><table class="hz" id="hzTable"></table></div>
+      </section>
+      <section class="panel">
+        <h2>How each hazard is solved</h2>
+        <div class="sols" id="sols"></div>
+      </section>
+    </section>
+
+    <!-- PERF -->
+    <section class="view" id="v-perf" hidden>
+      <div class="stats" id="perfStats"></div>
+      <section class="panel"><p class="insight" id="insight"></p></section>
+      <section class="panel">
+        <h2>Total cycles by issue width</h2>
+        <p class="hint" style="margin:0 0 10px">Same program, same units and same hazard solutions. Only the issue width changes. Shorter bars are faster.</p>
+        <div class="bars" id="wBars"></div>
+        <div class="tblwrap" style="margin-top:12px"><table class="cmp" id="wTable"></table></div>
+      </section>
+      <section class="panel">
+        <h2>Effect of each hazard solution</h2>
+        <p class="hint" style="margin:0 0 10px" id="solHint"></p>
+        <div class="bars" id="sBars"></div>
+      </section>
+      <section class="panel">
+        <h2>Execution unit utilization</h2>
+        <p class="hint" style="margin:0 0 10px">Percentage of cycles each unit was doing work in the current configuration.</p>
+        <div class="bars" id="uBars"></div>
+      </section>
+    </section>
+  </main>
+</div>
+<div id="tip" role="tooltip"></div>
+
+<script>
+/* ================= SAMPLE PROGRAMS ================= */
+const SAMPLES = {
+ "Hazard showcase": `; Every kind of data hazard in 8 instructions
+LW   R1, 0(R0)     ; I1 load from memory
+ADD  R2, R1, R1    ; I2 RAW: needs R1 from the load
+MUL  R3, R2, R5    ; I3 RAW: needs R2
+MUL  R6, R7, R8    ; I4 structural: only 1 multiplier
+SUB  R5, R9, R10   ; I5 WAR: overwrites R5 before I3 reads it
+ADD  R2, R11, R12  ; I6 WAW: writes R2 again (after I2)
+ADD  R13, R3, R6   ; I7 RAW on R3 and R6
+SW   R13, 10(R0)   ; I8 store result`,
+ "Intro example": `LW   R1, 0(R2)
+ADD  R3, R1, R4    ; RAW on R1
+MUL  R5, R6, R7    ; independent
+SUB  R8, R6, R9    ; independent
+ADD  R10, R5, R8   ; RAW on R5, R8
+ADD  R3, R11, R12  ; WAW with I2`,
+ "Array sum loop (branches)": `; sum = a[0] + ... + a[7]
+      ADDI R1, R0, 0     ; i = 0
+      ADDI R2, R0, 8     ; n = 8
+      ADDI R3, R0, 0     ; sum = 0
+loop: LW   R4, 0(R1)     ; a[i]
+      ADD  R3, R3, R4    ; sum += a[i]
+      ADDI R1, R1, 1     ; i++
+      BNE  R1, R2, loop  ; repeat while i != n
+      SW   R3, 20(R0)    ; store sum`,
+ "Dot product loop": `; dot = a[i]*b[i] summed over 6 elements
+      ADDI R1, R0, 0      ; i = 0
+      ADDI R2, R0, 6      ; n = 6
+      ADDI R3, R0, 0      ; dot = 0
+loop: LW   R4, 0(R1)      ; a[i]
+      LW   R5, 20(R1)     ; b[i]
+      MUL  R6, R4, R5
+      ADD  R3, R3, R6
+      ADDI R1, R1, 1
+      BNE  R1, R2, loop
+      SW   R3, 40(R0)`,
+ "If/else in a loop": `; alternating branch: hard for a predictor
+      ADDI R1, R0, 0
+      ADDI R2, R0, 8
+loop: ANDI R3, R1, 1     ; R3 = i is odd?
+      BEQ  R3, R0, even
+      ADDI R4, R4, 3     ; odd path
+      J    next
+even: ADDI R5, R5, 2     ; even path
+next: ADDI R1, R1, 1
+      BNE  R1, R2, loop`,
+ "Independent ops (high ILP)": `; no dependencies at all: scales with issue width
+ADD  R1, R2, R3
+SUB  R4, R5, R6
+LW   R7, 0(R0)
+MUL  R8, R2, R5
+OR   R9, R3, R6
+ADDI R10, R2, 7
+LW   R11, 4(R0)
+AND  R12, R5, R3
+MUL  R13, R6, R3
+XOR  R14, R2, R6
+ADDI R15, R3, 9
+SUB  R1, R6, R5`,
+ "Dependency chain (no ILP)": `; every instruction needs the previous result
+ADDI R1, R0, 5
+ADD  R2, R1, R1
+MUL  R3, R2, R1
+SUB  R4, R3, R2
+ADD  R5, R4, R3
+MUL  R6, R5, R4
+ADDI R7, R6, 1
+SW   R7, 0(R0)`
+};
+
+/* ================= ASSEMBLER ================= */
+const OPS={ADD:['ALU','R'],SUB:['ALU','R'],AND:['ALU','R'],OR:['ALU','R'],XOR:['ALU','R'],SLT:['ALU','R'],
+ ADDI:['ALU','I'],SUBI:['ALU','I'],ANDI:['ALU','I'],ORI:['ALU','I'],MUL:['MUL','R'],DIV:['MUL','R'],
+ LW:['MEM','L'],SW:['MEM','S'],BEQ:['BR','B'],BNE:['BR','B'],BLT:['BR','B'],J:['BR','J'],NOP:['ALU','N'],HALT:['BR','H']};
+function parse(src){
+  const prog=[],labels={},errs=[],pend=[];
+  src.split('\n').forEach((raw,ln)=>{
+    let s=raw.replace(/[;#].*$/,'').trim(); if(!s) return;
+    let m; while((m=s.match(/^([A-Za-z_]\w*)\s*:\s*/))){labels[m[1].toLowerCase()]=prog.length; s=s.slice(m[0].length);}
+    if(!s) return;
+    const sp=s.match(/^(\w+)\s*(.*)$/); if(!sp){errs.push(`Line ${ln+1}: cannot read "${s}"`);return;}
+    const op=sp[1].toUpperCase(), def=OPS[op];
+    if(!def){errs.push(`Line ${ln+1}: unknown instruction "${sp[1]}"`);return;}
+    const args=sp[2]?sp[2].split(',').map(a=>a.trim()).filter(Boolean):[];
+    const I={op,type:def[0],kind:def[1],dest:0,srcs:[],imm:0,line:ln+1};
+    const reg=a=>{const r=/^[rR](\d+)$/.exec(a); if(!r||+r[1]>15) throw `"${a}" is not a register (use R0 to R15)`; return +r[1];};
+    const num=a=>{if(!/^-?\d+$/.test(a)) throw `"${a}" is not a number`; return +a;};
+    const need=n=>{if(args.length!==n) throw `${op} needs ${n} operand${n===1?'':'s'}, found ${args.length}`;};
+    try{
+      switch(def[1]){
+        case 'R': need(3); I.dest=reg(args[0]); I.srcs=[reg(args[1]),reg(args[2])]; break;
+        case 'I': need(3); I.dest=reg(args[0]); I.srcs=[reg(args[1])]; I.imm=num(args[2]); break;
+        case 'L': case 'S': { need(2); const mm=/^(-?\d+)\s*\(\s*([rR]\d+)\s*\)$/.exec(args[1]);
+          if(!mm) throw `write it as ${op} Rx, offset(Ry)`; I.imm=+mm[1]; const b=reg(mm[2]);
+          if(def[1]==='L'){I.dest=reg(args[0]); I.srcs=[b];} else I.srcs=[reg(args[0]),b]; break; }
+        case 'B': need(3); I.srcs=[reg(args[0]),reg(args[1])]; I.label=args[2]; pend.push(I); break;
+        case 'J': need(1); I.label=args[0]; pend.push(I); break;
+        default: need(0);
+      }
+    }catch(e){errs.push(`Line ${ln+1}: ${e}`);return;}
+    I.text=op+(args.length?' '+args.join(', '):'');
+    prog.push(I);
+  });
+  pend.forEach(I=>{const t=labels[I.label.toLowerCase()]; if(t===undefined) errs.push(`Line ${I.line}: label "${I.label}" is not defined`); else I.target=t;});
+  if(!prog.length&&!errs.length) errs.push('The program is empty. Type some instructions or pick a sample.');
+  prog.forEach((I,i)=>I.pc=i);
+  return {prog,errs};
+}
+
+/* ================= FUNCTIONAL EXECUTION (gives the real branch outcomes) ================= */
+function execute(prog){
+  const R=new Array(16).fill(0), M=Array.from({length:64},(_,i)=>i+1), tr=[]; let pc=0, trunc=false;
+  const ad=x=>((x%64)+64)%64;
+  while(pc>=0&&pc<prog.length){
+    if(tr.length>=400){trunc=true;break;}
+    const I=prog[pc], a=R[I.srcs[0]]|0, b=R[I.srcs[1]]|0; let res=null,taken=false;
+    switch(I.op){
+      case'ADD':res=a+b;break;case'SUB':res=a-b;break;case'AND':res=a&b;break;case'OR':res=a|b;break;
+      case'XOR':res=a^b;break;case'SLT':res=a<b?1:0;break;case'ADDI':res=a+I.imm;break;case'SUBI':res=a-I.imm;break;
+      case'ANDI':res=a&I.imm;break;case'ORI':res=a|I.imm;break;case'MUL':res=Math.imul(a,b);break;
+      case'DIV':res=b===0?0:Math.trunc(a/b);break;case'LW':res=M[ad(a+I.imm)];break;case'SW':M[ad(b+I.imm)]=a;break;
+      case'BEQ':taken=a===b;break;case'BNE':taken=a!==b;break;case'BLT':taken=a<b;break;case'J':taken=true;break;
+    }
+    if(I.dest&&res!==null) R[I.dest]=res|0;
+    tr.push({pc,taken,result:res|0});
+    if(I.op==='HALT') break;
+    pc=taken?I.target:pc+1;
+  }
+  return {trace:tr,trunc};
+}
+
+/* ================= CYCLE-ACCURATE TIMING SIMULATOR =================
+   Stages: IF → ID (decode/rename) → IS (issue queue) → EX (functional unit, k cycles) → WB (in-order commit)
+*/
+const TYPES=['ALU','MUL','MEM','BR'];
+const UNAME={ALU:'ALU',MUL:'MUL',MEM:'LSU',BR:'BRU'};
+function simulate(prog,trace,cfg){
+  const W=cfg.width, LIMIT=4000;
+  const lat=t=>t==='BR'?1:cfg.lat[t];
+  const units=[]; TYPES.forEach(t=>{for(let i=0;i<cfg.units[t];i++) units.push({t,name:UNAME[t]+i,occ:[]});});
+  const all=[],IF=[],ID=[],IS=[],inflight=[];
+  let seq=0,tracePos=0,wrongPC=null,fetchBlock=null,cycle=0;
+  let regWriter={}; const ctr={}; const regs=new Array(16).fill(0);
+  let phys=16; const archMap={}; for(let r=0;r<16;r++) archMap[r]='P'+r; let rmap={...archMap};
+  const st={RAW:0,WAR:0,WAW:0,STRUCT:0,WIDTH:0,ORDER:0,MEMORD:0,FULL:0,CTRL:0};
+  const stByType={ALU:0,MUL:0,MEM:0,BR:0};
+  let mispred=0,branches=0,flushedTotal=0,committed=0,busyUnitCycles=0,issuedTotal=0;
+  const unitBusy={}; units.forEach(u=>unitBusy[u.name]=0);
+  const snaps=[{c:0,IF:[],ID:[],IS:[],EX:units.map(u=>({name:u.name,t:u.t,ids:[]})),ROB:[],WB:[],FL:[],reasons:{},ev:[{k:'info',m:'Pipeline is empty. Press Step or Play to start fetching instructions.'}],regs:regs.slice(),writers:{},rmap:{...rmap},ctr:{},spec:[],committed:0,issued:0,flushInfo:null}];
+  const tag=x=>`#${x.id+1}`;
+  const R=r=>'R'+r;
+  const recompute=()=>{regWriter={}; rmap={...archMap}; for(const x of inflight) if(x.decoded&&x.dest){regWriter[x.dest]=x; if(x.pdest) rmap[x.dest]=x.pdest;}};
+  const pull=(arr,x)=>{const i=arr.indexOf(x); if(i>=0) arr.splice(i,1);};
+
+  while(cycle<LIMIT){
+    cycle++;
+    const ev=[],FL=[],reasons={}; let flushInfo=null;
+    units.forEach(u=>u.occ=u.occ.filter(o=>!o.flushC&&(cfg.pipe?o.exEnd>=cycle:o.exEnd>=cycle)));
+
+    /* 1. branches that finished EX last cycle resolve now */
+    for(const b of inflight.slice()){
+      if(b.flushC||!b.cond||b.exEnd!==cycle-1) continue;
+      if(b.wrong){continue;}
+      branches++;
+      const act=b.tr.taken;
+      if(cfg.bp==='stall'){
+        fetchBlock=null;
+        ev.push({k:'branch',m:`${tag(b)} ${b.I.op} resolved: ${act?'taken':'not taken'}. Fetch restarts at I${(act?b.I.target:b.pc+1)+1}.`});
+      }else{
+        if(cfg.bp==='2bit'){let c=ctr[b.pc]??1; c=act?Math.min(3,c+1):Math.max(0,c-1); ctr[b.pc]=c;}
+        if(b.pred!==act){
+          mispred++; b.mis=true;
+          const vict=inflight.filter(x=>x.seq>b.seq);
+          vict.forEach(v=>{v.flushC=cycle;FL.push(v.id);pull(IF,v);pull(ID,v);pull(IS,v);pull(inflight,v);units.forEach(u=>pull(u.occ,v));});
+          flushedTotal+=vict.length; wrongPC=null; recompute();
+          flushInfo={br:b.id,n:vict.length};
+          ev.push({k:'flush',m:`${tag(b)} ${b.I.op} MISPREDICTED: guessed ${b.pred?'taken':'not taken'}, actually ${act?'taken':'not taken'}. Flushed ${vict.length} wrong-path instruction${vict.length===1?'':'s'}${vict.length?' ('+vict.map(tag).join(', ')+')':''}. Fetch redirected to I${(act?b.I.target:b.pc+1)+1}.`});
+        }else ev.push({k:'branch',m:`${tag(b)} ${b.I.op} resolved: prediction "${act?'taken':'not taken'}" was correct, no penalty.`});
+      }
+    }
+
+    /* 2. commit / write-back, in program order */
+    const WB=[];
+    while(WB.length<W&&inflight.length){
+      const h=inflight[0];
+      if(h.exEnd!=null&&h.exEnd<cycle){
+        h.wb=cycle; inflight.shift(); WB.push(h.id); committed++;
+        if(h.dest){regs[h.dest]=h.tr.result; if(regWriter[h.dest]===h) delete regWriter[h.dest]; if(h.pdest) archMap[h.dest]=h.pdest;}
+      }else break;
+    }
+    if(WB.length) ev.push({k:'commit',m:`Write-back: ${WB.map(id=>{const x=all[id];return tag(x)+(x.dest?` (${R(x.dest)} = ${x.tr.result})`:'');}).join(', ')}.`});
+
+    /* 3. issue from the issue queue */
+    let issued=0,blocker=null;
+    const check=x=>{
+      for(const {r,p} of x.prod){
+        if(!p) continue;
+        const ok=cfg.fwd?(p.exEnd!=null&&p.exEnd<cycle):(p.wb!=null&&p.wb<cycle);
+        if(!ok){
+          const when=cfg.fwd?(p.exEnd==null?'it has not started executing':`its result is forwarded at the end of cycle ${p.exEnd}`):(p.exEnd==null?'it has not started executing':'no forwarding, so it must wait for write-back');
+          return {k:'RAW',s:`RAW ${R(r)}←${tag(p)}`,m:`${tag(x)} stalled, RAW hazard: needs ${R(r)} from ${tag(p)} ${p.I.op}; ${when}.`};
+        }
+      }
+      if(!cfg.rename&&x.dest){
+        for(const y of inflight){
+          if(y.seq>=x.seq) break;
+          if(y.dest===x.dest) return {k:'WAW',s:`WAW ${R(x.dest)} vs ${tag(y)}`,m:`${tag(x)} stalled, WAW hazard: older ${tag(y)} also writes ${R(x.dest)} and has not written it yet. Renaming would remove this.`};
+          if(y.s==null&&y.srcs.includes(x.dest)) return {k:'WAR',s:`WAR ${R(x.dest)} vs ${tag(y)}`,m:`${tag(x)} stalled, WAR hazard: older ${tag(y)} has not read ${R(x.dest)} yet, so ${tag(x)} cannot overwrite it. Renaming would remove this.`};
+        }
+      }
+      if(x.type==='MEM'){
+        for(const y of inflight){ if(y.seq>=x.seq) break; if(y.type==='MEM'&&y.s==null) return {k:'MEMORD',s:`mem order ${tag(y)}`,m:`${tag(x)} waits: memory operations go in order, ${tag(y)} first.`}; }
+      }
+      const cands=units.filter(u=>u.t===x.type);
+      const free=cands.find(u=>cfg.pipe?!u.occ.some(o=>o.s===cycle):!u.occ.some(o=>o.exEnd>=cycle));
+      if(!free){
+        const busy=cands.flatMap(u=>u.occ.filter(o=>o.exEnd>=cycle)).map(tag);
+        return {k:'STRUCT',s:`STRUCT ${UNAME[x.type]} busy`,m:`${tag(x)} stalled, structural hazard: all ${cands.length} ${UNAME[x.type]} unit${cands.length>1?'s are':' is'} busy${busy.length?' with '+busy.join(', '):''}.`};
+      }
+      if(issued>=W) return {k:'WIDTH',s:`issue width full`,m:`${tag(x)} waits: ${W} instruction${W>1?'s':''} already issued this cycle (issue width ${W}).`};
+      return {ok:true,unit:free};
+    };
+    for(const x of IS.filter(x=>x.isC<cycle)){
+      let r=(!cfg.ooo&&blocker)?null:check(x);
+      if(!cfg.ooo&&blocker){const own=check(x); r=(own.ok||own.k==='WIDTH')?{k:'ORDER',s:`in-order: behind ${tag(blocker)}`,m:`${tag(x)} is ready but waits: in-order issue cannot pass stalled ${tag(blocker)}.`}:own;}
+      if(!r.ok){
+        reasons[x.id]=r; st[r.k]++; if(r.k==='STRUCT') stByType[x.type]++;
+        if(!blocker) blocker=x;
+        if(r.k!=='WIDTH'&&r.k!=='ORDER') ev.push({k:'stall',m:r.m});
+        continue;
+      }
+      const u=r.unit; x.s=cycle; x.exEnd=cycle+lat(x.type)-1; x.unit=u.name; u.occ.push(x); pull(IS,x); issued++; issuedTotal++;
+      ev.push({k:'issue',m:`${tag(x)} ${x.I.text} issued to ${u.name}${lat(x.type)>1?` (busy ${lat(x.type)} cycles)`:''}.`});
+    }
+    const widthStalls=Object.values(reasons).filter(r=>r.k==='WIDTH').length, orderStalls=Object.values(reasons).filter(r=>r.k==='ORDER').length;
+    if(widthStalls) ev.push({k:'stall',m:`${widthStalls} ready instruction${widthStalls>1?'s':''} left waiting: issue width (${W}) used up.`});
+    if(orderStalls) ev.push({k:'stall',m:`${orderStalls} ready instruction${orderStalls>1?'s':''} blocked by in-order issue. Out-of-order issue would let ${orderStalls>1?'them':'it'} go.`});
+
+    /* 4. ID → IS (dispatch) */
+    while(ID.length&&IS.length<cfg.window){const x=ID.shift(); x.isC=cycle; IS.push(x);}
+    if(ID.length){ID.forEach(x=>reasons[x.id]={k:'FULL',s:'issue queue full',m:`${tag(x)} cannot enter the full issue queue.`}); st.FULL+=ID.length;}
+
+    /* 5. IF → ID (decode + rename) */
+    const dec=[];
+    while(IF.length&&ID.length<W&&IF[0].ifC<cycle){
+      const x=IF.shift(); x.idC=cycle;
+      x.prod=x.srcs.filter((r,i,a)=>r&&a.indexOf(r)===i).map(r=>({r,p:regWriter[r]||null}));
+      x.psrc=x.srcs.map(r=>r?rmap[r]:'P0');
+      if(x.dest){regWriter[x.dest]=x; if(cfg.rename){x.pdest='P'+(phys++); rmap[x.dest]=x.pdest;}}
+      x.decoded=true; ID.push(x); dec.push(x);
+    }
+    if(dec.length&&cfg.rename){const rn=dec.filter(x=>x.pdest); if(rn.length) ev.push({k:'info',m:`Rename: ${rn.map(x=>`${tag(x)} ${R(x.dest)}→${x.pdest}`).join(', ')}.`});}
+
+    /* 6. fetch */
+    const fet=[];
+    if(fetchBlock){st.CTRL++; ev.push({k:'stall',m:`Fetch stalled: waiting for branch ${tag(fetchBlock)} to resolve (control hazard).`});}
+    else{
+      while(IF.length<W){
+        let pc,tr=null,wrong=false;
+        if(wrongPC!==null){ if(wrongPC<0||wrongPC>=prog.length) break; pc=wrongPC; wrong=true; }
+        else{ if(tracePos>=trace.length) break; tr=trace[tracePos++]; pc=tr.pc; }
+        const I=prog[pc];
+        const x={id:seq,seq:seq++,pc,I,type:I.type,dest:I.dest,srcs:I.srcs,wrong,tr,ifC:cycle,cond:I.kind==='B',hist:{}};
+        all.push(x); inflight.push(x); IF.push(x); fet.push(x);
+        let stop=false;
+        if(x.cond){
+          if(cfg.bp==='stall'){fetchBlock=x; stop=true;}
+          else{
+            const pred=cfg.bp==='nt'?false:((ctr[pc]??1)>=2); x.pred=pred;
+            const nx=pred?I.target:pc+1;
+            if(!wrong){ if(pred!==tr.taken) wrongPC=nx; } else wrongPC=nx;
+            if(pred) stop=true;
+          }
+        }else if(I.kind==='J'){ if(wrong) wrongPC=I.target; stop=true; }
+        else if(I.kind==='H'){ if(wrong) wrongPC=-1; stop=true; }
+        else if(wrong) wrongPC=pc+1;
+        if(stop) break;
+      }
+      if(fet.length){
+        const br=fet.filter(x=>x.cond);
+        ev.unshift({k:'fetch',m:`Fetched ${fet.map(x=>tag(x)+' '+x.I.op).join(', ')}.`+(br.length&&cfg.bp!=='stall'?` Predicted ${br.map(b=>tag(b)+' '+(b.pred?'taken':'not taken')).join(', ')}.`:'')+(br.length&&cfg.bp==='stall'?' Branch found: fetch stops until it resolves.':'')});
+      }
+    }
+
+    /* bookkeeping + snapshot */
+    const EX=units.map(u=>{const ids=u.occ.filter(o=>o.s<=cycle&&o.exEnd>=cycle).map(o=>o.id); if(ids.length){busyUnitCycles++;unitBusy[u.name]++;} return {name:u.name,t:u.t,ids};});
+    const ROB=inflight.filter(x=>x.exEnd!=null&&x.exEnd<cycle).map(x=>x.id);
+    ROB.forEach(id=>{const h=inflight[0]; reasons[id]={k:'ROB',s:`done, commit after ${tag(h)}`,m:`${tag(all[id])} finished executing but must commit in program order, after ${tag(h)}.`};});
+    const spec=[]; if(cfg.bp!=='stall'){let on=false; for(const x of inflight){ if(on) spec.push(x.id); if(x.cond&&(x.exEnd==null||x.exEnd>=cycle)) on=true; }}
+    snaps.push({c:cycle,IF:IF.map(x=>x.id),ID:ID.map(x=>x.id),IS:IS.map(x=>x.id),EX,ROB,WB,FL,reasons,ev,regs:regs.slice(),
+      writers:Object.fromEntries(Object.entries(regWriter).map(([r,x])=>[r,x.id])),rmap:{...rmap},ctr:{...ctr},spec,committed,issued,flushInfo});
+    if(tracePos>=trace.length&&inflight.length===0&&wrongPC===null) break;
+    if(tracePos>=trace.length&&inflight.length===0) break;
+  }
+  // per-instruction stage history for the timing diagram
+  snaps.forEach(s=>{
+    const c=s.c;
+    s.IF.forEach(id=>all[id].hist[c]='IF'); s.ID.forEach(id=>all[id].hist[c]='ID');
+    s.IS.forEach(id=>all[id].hist[c]=(s.reasons[id]?'ST':'IS'));
+    s.EX.forEach(u=>u.ids.forEach(id=>{const x=all[id]; x.hist[c]='E'+(c-x.s+1);}));
+    s.ROB.forEach(id=>all[id].hist[c]='RB'); s.WB.forEach(id=>all[id].hist[c]='WB'); s.FL.forEach(id=>all[id].hist[c]='FL');
+  });
+  const cycles=snaps.length-1, totalUnits=units.length;
+  return {all,snaps,units,unitBusy,cycles,committed,ipc:committed/Math.max(1,cycles),
+    util:busyUnitCycles/Math.max(1,totalUnits*cycles),issueUtil:issuedTotal/Math.max(1,W*cycles),
+    st,stByType,mispred,branches,flushedTotal,limit:cycle>=LIMIT};
+}
+
+/* ================= STATIC HAZARD ANALYSIS ================= */
+function staticHazards(prog){
+  const out=[],seen=new Set(); const add=h=>{const k=h.t+h.i+'-'+h.j+'-'+h.r; if(!seen.has(k)){seen.add(k);out.push(h);}};
+  prog.forEach((J,j)=>{
+    J.srcs.forEach(r=>{ if(!r) return; for(let i=j-1;i>=0;i--) if(prog[i].dest===r){add({t:'RAW',i,j,r});break;} });
+    if(J.dest){
+      let w=-1; for(let i=j-1;i>=0;i--) if(prog[i].dest===J.dest){w=i;break;}
+      if(w>=0) add({t:'WAW',i:w,j,r:J.dest});
+      for(let i=w+1;i<j;i++) if(prog[i].srcs.includes(J.dest)) add({t:'WAR',i,j,r:J.dest});
+    }
+    if(J.kind==='B') add({t:'CTRL',i:j,j:j,r:0});
+  });
+  return out;
+}
+
+/* ================= STATE ================= */
+const DEF={width:2,units:{ALU:2,MUL:1,MEM:1,BR:1},lat:{ALU:1,MUL:3,MEM:2},fwd:true,rename:false,ooo:false,pipe:false,bp:'2bit',window:8};
+let cfg=JSON.parse(JSON.stringify(DEF));
+let prog=[],trace=[],trunc=false,sim=null,cur=0,timer=null,selId=null,view='live';
+const $=s=>document.querySelector(s);
+const chipEls=new Map();
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pct=v=>(v*100).toFixed(0)+'%';
+
+/* ================= CONTROLS ================= */
+const sel=$('#sample'); Object.keys(SAMPLES).forEach(k=>{const o=document.createElement('option');o.textContent=k;sel.appendChild(o);});
+sel.onchange=()=>{$('#src').value=SAMPLES[sel.value]; load(); };
+$('#bRun').onclick=()=>load();
+$('#src').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();load();}});
+document.querySelectorAll('#width button').forEach(b=>b.onclick=()=>{cfg.width=+b.dataset.w; syncControls(); rerun();});
+TYPES.forEach(t=>{ $('#n'+t).onchange=e=>{cfg.units[t]=clamp(+e.target.value,1,+e.target.max);syncControls();rerun();};
+  if(t!=='BR') $('#l'+t).onchange=e=>{cfg.lat[t]=clamp(+e.target.value,1,+e.target.max);syncControls();rerun();}; });
+$('#win').onchange=e=>{cfg.window=clamp(+e.target.value,2,32);syncControls();rerun();};
+[['oFwd','fwd'],['oRen','rename'],['oOoo','ooo'],['oPipe','pipe']].forEach(([id,k])=>$('#'+id).onchange=e=>{cfg[k]=e.target.checked;rerun();});
+$('#oBp').onchange=e=>{cfg.bp=e.target.value;rerun();};
+$('#pNone').onclick=()=>{Object.assign(cfg,{fwd:false,rename:false,ooo:false,pipe:false,bp:'stall'});syncControls();rerun();};
+$('#pAll').onclick=()=>{Object.assign(cfg,{fwd:true,rename:true,ooo:true,pipe:true,bp:'2bit'});syncControls();rerun();};
+function clamp(v,a,b){return isNaN(v)?a:Math.max(a,Math.min(b,v));}
+function syncControls(){
+  document.querySelectorAll('#width button').forEach(b=>b.setAttribute('aria-pressed',+b.dataset.w===cfg.width));
+  TYPES.forEach(t=>{$('#n'+t).value=cfg.units[t]; if(t!=='BR') $('#l'+t).value=cfg.lat[t];});
+  $('#win').value=cfg.window; $('#oFwd').checked=cfg.fwd; $('#oRen').checked=cfg.rename; $('#oOoo').checked=cfg.ooo; $('#oPipe').checked=cfg.pipe; $('#oBp').value=cfg.bp;
+}
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+  view=b.dataset.v; document.querySelectorAll('.tabs button').forEach(x=>x.setAttribute('aria-selected',x===b));
+  ['live','timing','hazards','perf'].forEach(v=>$('#v-'+v).hidden=v!==view);
+  if(view==='timing') markTiming(); try{localStorage.setItem('ss-view',view);}catch(e){}
+});
+$('#bPlay').onclick=()=>timer?pause():play();
+$('#bStep').onclick=()=>{pause();go(cur+1,true);};
+$('#bBack').onclick=()=>{pause();go(cur-1,false);};
+$('#bReset').onclick=()=>{pause();go(0,false);};
+$('#scrub').oninput=e=>{pause();go(+e.target.value,false);};
+$('#speed').oninput=()=>{if(timer){pause();play();}};
+document.addEventListener('keydown',e=>{
+  if(/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+  if(e.key===' '){e.preventDefault();timer?pause():play();}
+  else if(e.key==='ArrowRight'){pause();go(cur+1,true);}
+  else if(e.key==='ArrowLeft'){pause();go(cur-1,false);}
+  else if(e.key==='Home'){pause();go(0,false);}
+});
+const stepMs=()=>Math.round(1700/Math.pow(1.38,+$('#speed').value-1));
+function play(){ if(cur>=sim.cycles) go(0,false); $('#playTxt').textContent='Pause'; $('#playIco').innerHTML='<path d="M3 2h4v12H3zM9 2h4v12H9z"/>';
+  timer=setInterval(()=>{ if(cur>=sim.cycles){pause();return;} go(cur+1,true); },stepMs()); }
+function pause(){ clearInterval(timer); timer=null; $('#playTxt').textContent='Play'; $('#playIco').innerHTML='<path d="M4 2v12l10-6z"/>'; }
+
+/* ================= RUN ================= */
+function load(){
+  pause();
+  const r=parse($('#src').value); const e=$('#err');
+  if(r.errs.length){e.hidden=false;e.textContent=r.errs.join('\n');return;}
+  prog=r.prog; const ex=execute(prog); trace=ex.trace; trunc=ex.trunc;
+  e.hidden=!trunc; e.textContent=trunc?'The program ran for 400 instructions without finishing, so the simulation stops there. Check your loop condition.':'';
+  selId=null; buildBoard(); rerun(true);
+}
+function rerun(fresh){
+  if(!prog.length) return;
+  const keep=fresh?0:cur;
+  sim=simulate(prog,trace,cfg);
+  chipEls.forEach(el=>el.remove()); chipEls.clear(); buildBoard();
+  $('#scrub').max=sim.cycles; $('#cTot').textContent=sim.cycles;
+  buildTiming(); renderHazards(); renderPerf();
+  go(Math.min(keep,sim.cycles),false);
+}
+function go(c,animate){
+  c=Math.max(0,Math.min(sim.cycles,c)); const prev=cur; cur=c;
+  $('#cNow').textContent=c; $('#scrub').value=c;
+  renderLive(sim.snaps[c],animate&&c===prev+1&&!reduce&&view==='live');
+  markTiming();
+}
+
+/* ================= LIVE BOARD ================= */
+function buildBoard(){
+  const b=$('#board'); const W=cfg.width;
+  const lanes=[]; TYPES.forEach(t=>{for(let i=0;i<cfg.units[t];i++) lanes.push({t,name:UNAME[t]+i});});
+  b.innerHTML=`
+   <div class="stage"><header><b>IF</b><span>Instruction<br>fetch</span></header><div class="slots" id="s-IF" data-n="${W}"></div></div>
+   <div class="stage"><header><b>ID</b><span>Decode${cfg.rename?' +<br>rename':'<br>&nbsp;'}</span></header><div class="slots" id="s-ID" data-n="${W}"></div></div>
+   <div class="stage"><header><b>IS</b><span>Issue queue<br>${cfg.window} entries</span></header><div class="slots" id="s-IS" data-n="0"></div></div>
+   <div class="stage"><header><b>EX</b><span>Execution units<br>${lanes.length} total${cfg.pipe?', pipelined':''}</span></header>
+     ${lanes.map(l=>`<div class="lane"><div class="ln" style="color:var(--u-${l.t.toLowerCase()})">${l.name}</div><div class="slots" id="u-${l.name}" data-n="1"></div></div>`).join('')}
+   </div>
+   <div class="stage"><header><b>WB</b><span>Write-back<br>in-order commit</span></header><div class="slots" id="s-WB" data-n="${W}"></div><div class="sub-h">Done, waiting to commit</div><div class="slots" id="s-ROB" data-n="0" style="min-height:20px"></div></div>
+   <div class="stage retired"><header style="width:100%"><b style="font-size:15px">DONE</b></header><div class="big" id="retN">0</div><div class="hint" id="retOf">of 0</div><div class="lst" id="retL"></div></div>
+   <div class="fx" id="fx"></div>`;
+}
+function chip(id){
+  let el=chipEls.get(id); if(el) return el;
+  const x=sim.all[id]; el=document.createElement('div'); el.className='chip t-'+x.type; el.dataset.id=id; el.tabIndex=0;
+  el.innerHTML=`<div class="ct"><b>#${id+1}</b><span class="ut">${x.type}</span><span class="pc">I${x.pc+1}</span></div><div class="op">${esc(x.I.text)}</div><div class="nt"></div><div class="bar" style="width:0"></div>`;
+  el.onclick=()=>{selId=id; renderLive(sim.snaps[cur],false);};
+  el.onkeydown=e=>{if(e.key==='Enter'){selId=id; renderLive(sim.snaps[cur],false);}};
+  el.addEventListener('mouseenter',ev=>{const r=sim.snaps[cur].reasons[id]; showTip(ev,`<b>#${id+1} · I${x.pc+1}</b> ${esc(x.I.text)}${r?'<br>'+esc(r.m):''}`);});
+  el.addEventListener('mouseleave',hideTip);
+  chipEls.set(id,el); return el;
+}
+function noteFor(x,s,stage){
+  const r=s.reasons[x.id], c=s.c;
+  if(stage==='EX'){const L=x.exEnd-x.s+1, k=c-x.s+1; return {t:`${x.unit} · EX ${k}/${L}`,bar:k/L};}
+  if(stage==='WB') return {t:x.dest?`✓ writes R${x.dest} = ${x.tr.result}`:'✓ commits',cls:'wb'};
+  if(r) return {t:r.s,cls:r.k==='ROB'?'rob':'stall'};
+  if(stage==='ID'&&x.pdest) return {t:`rename R${x.dest}→${x.pdest}`};
+  if(stage==='IS') return {t:x.isC===c?'entered queue':'ready'};
+  if(stage==='IF'&&x.cond&&cfg.bp!=='stall') return {t:`predict ${x.pred?'taken':'not taken'}`};
+  if(stage==='IF') return {t:'fetched'};
+  if(stage==='ID') return {t:'decoding'};
+  return {t:''};
+}
+function renderLive(s,animate){
+  const board=$('#board'), bRect=board.getBoundingClientRect();
+  const first=new Map(); if(animate) chipEls.forEach((el,id)=>{ if(el.isConnected&&!el.classList.contains('flushing')) first.set(id,el.getBoundingClientRect()); });
+  const placed=new Set(), fx=$('#fx');
+  const prev=sim.snaps[s.c-1];
+  // retire / flush leaving chips into the fx layer
+  if(animate){
+    const leaving=[...first.keys()];
+    const now=new Set([...s.IF,...s.ID,...s.IS,...s.ROB,...s.WB,...s.EX.flatMap(u=>u.ids)]);
+    const retBox=$('#retN').getBoundingClientRect();
+    leaving.forEach(id=>{ if(now.has(id)) return; const el=chipEls.get(id), r=first.get(id);
+      el.style.cssText=`position:absolute;left:${r.left-bRect.left}px;top:${r.top-bRect.top}px;width:${r.width}px;margin:0;z-index:4`;
+      fx.appendChild(el); chipEls.delete(id);
+      if(s.FL.includes(id)){ el.classList.add('flushing');
+        el.animate([{transform:'none',opacity:1},{transform:'translateX(-4px)',offset:.15},{transform:'translateX(4px)',offset:.3},{transform:'translateX(0) scale(1)',opacity:1,offset:.55},{transform:'scale(.6) translateY(20px)',opacity:0}],{duration:1100,easing:'ease-in',fill:'forwards'}).onfinish=()=>el.remove();
+      }else{ const dx=retBox.left-r.left, dy=retBox.top-r.top;
+        el.animate([{transform:'none',opacity:1},{transform:`translate(${dx}px,${dy}px) scale(.3)`,opacity:0}],{duration:520,easing:'cubic-bezier(.5,0,.8,.4)',fill:'forwards'}).onfinish=()=>el.remove(); }
+    });
+  }
+  fx.querySelectorAll('.chip').forEach(el=>{ if(!animate) el.remove(); });
+  const put=(ids,cont,stage,minN)=>{
+    cont.querySelectorAll('.ph').forEach(p=>p.remove());
+    ids.forEach(id=>{const x=sim.all[id], el=chip(id), n=noteFor(x,s,stage);
+      el.classList.remove('stall','wb','rob','spec','sel'); if(n.cls) el.classList.add(n.cls);
+      if(s.spec.includes(id)) el.classList.add('spec'); if(id===selId) el.classList.add('sel');
+      el.querySelector('.nt').textContent=n.t; el.querySelector('.bar').style.width=(n.bar?n.bar*100:0)+'%';
+      cont.appendChild(el); placed.add(id);});
+    for(let i=ids.length;i<minN;i++){const p=document.createElement('div');p.className='ph';p.textContent='empty';cont.appendChild(p);}
+  };
+  // detach chips not present any more (non-animated)
+  const want=new Set([...s.IF,...s.ID,...s.IS,...s.ROB,...s.WB,...s.EX.flatMap(u=>u.ids)]);
+  chipEls.forEach((el,id)=>{ if(!want.has(id)){el.remove();chipEls.delete(id);} });
+  put(s.IF,$('#s-IF'),'IF',cfg.width); put(s.ID,$('#s-ID'),'ID',cfg.width); put(s.IS,$('#s-IS'),'IS',Math.min(cfg.window,3));
+  s.EX.forEach(u=>put(u.ids,$('#u-'+u.name),'EX',1)); put(s.WB,$('#s-WB'),'WB',cfg.width); put(s.ROB,$('#s-ROB'),'ROB',0);
+  if(animate){
+    placed.forEach(id=>{const el=chipEls.get(id), a=first.get(id), b=el.getBoundingClientRect();
+      if(a){const dx=a.left-b.left,dy=a.top-b.top; if(Math.abs(dx)+Math.abs(dy)>1) el.animate([{transform:`translate(${dx}px,${dy}px)`},{transform:'none'}],{duration:Math.min(480,stepMs()*.6),easing:'cubic-bezier(.2,.7,.2,1)'});}
+      else el.animate([{opacity:0,transform:'translateY(-14px) scale(.92)'},{opacity:1,transform:'none'}],{duration:360,easing:'ease-out'});
+    });
+  }
+  // retired column
+  const done=sim.all.filter(x=>x.wb!=null&&x.wb<=s.c).sort((a,b)=>b.wb-a.wb||b.id-a.id);
+  $('#retN').textContent=s.committed; $('#retOf').textContent=`of ${trace.length} committed`;
+  $('#retL').innerHTML=done.slice(0,8).map(x=>`<div>#${x.id+1} ${esc(x.I.op)}</div>`).join('');
+  // banner
+  const bn=$('#banner');
+  if(s.flushInfo){const b=sim.all[s.flushInfo.br]; bn.innerHTML=`<div class="banner"><b>Branch mispredicted.</b> #${b.id+1} ${esc(b.I.text)} went the other way. ${s.flushInfo.n} wrong-path instruction${s.flushInfo.n===1?' was':'s were'} flushed and fetch restarts on the correct path.</div>`;}
+  else if(s.c===sim.cycles&&s.c>0) bn.innerHTML=`<div class="banner ok"><b>Finished.</b> ${sim.committed} instructions in ${sim.cycles} cycles. IPC ${sim.ipc.toFixed(2)}. See the Performance tab for the comparison with single-issue.</div>`;
+  else bn.innerHTML='';
+  // stats
+  const stalls=sim.snaps.slice(1,s.c+1).reduce((a,x)=>a+Object.values(x.reasons).filter(r=>r.k!=='ROB').length,0);
+  const fl=sim.snaps.slice(1,s.c+1).reduce((a,x)=>a+x.FL.length,0);
+  $('#liveStats').innerHTML=[
+    ['Cycle',`${s.c}<small> / ${sim.cycles}</small>`],['Committed',`${s.committed}<small> / ${trace.length}</small>`],
+    ['IPC so far',s.c?(s.committed/s.c).toFixed(2):'0.00'],['Issued now',`${s.issued}<small> / ${cfg.width}</small>`],
+    ['Stall slots',stalls],['Flushed',fl]
+  ].map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  // log
+  $('#logH').textContent=s.c?`What happened in cycle ${s.c}`:'Ready';
+  $('#log').innerHTML=(s.ev.length?s.ev:[{k:'info',m:'Nothing new this cycle.'}]).map(e=>`<li><span class="k ${e.k}">${e.k}</span><span>${esc(e.m)}</span></li>`).join('');
+  // registers
+  const pv=prev?prev.regs:null;
+  $('#regs').innerHTML=s.regs.map((v,r)=>{const w=s.writers[r]; const busy=w!=null;
+    const ren=cfg.rename?`${s.rmap[r]}`:''; const p=busy?`pending ← #${w+1}${ren?' · '+ren:''}`:(ren?`→ ${ren}`:'');
+    return `<div class="reg${busy?' busy':''}${pv&&pv[r]!==v?' flash':''}"><span class="rn">R${r}</span><span class="rv">${v}</span><span class="rp">${p}</span></div>`;}).join('');
+  // predictor
+  const brs=prog.filter(I=>I.kind==='B');
+  if(brs.length&&cfg.bp==='2bit'){
+    const names=['SNT','WNT','WT','ST'];
+    $('#pred').innerHTML=`<div class="hint" style="font-weight:600;color:var(--ink)">2-bit branch predictor (≥ WT means predict taken)</div>`+brs.map(I=>{const c=s.ctr[I.pc]??1;
+      return `<div class="pr"><span style="width:92px">I${I.pc+1} ${I.op}</span><span class="fsm">${names.map((n,i)=>`<span class="${i===c?'on':''}">${n}</span>`).join('')}</span></div>`;}).join('')+
+      `<div class="hint">SNT/WNT = strongly/weakly not taken, WT/ST = weakly/strongly taken.</div>`;
+  }else if(brs.length) $('#pred').innerHTML=`<div class="hint">${cfg.bp==='nt'?'Static prediction: every branch is guessed not taken.':'No prediction: fetch waits for every branch.'}</div>`;
+  else $('#pred').innerHTML='';
+  renderInspector(s);
+}
+function renderInspector(s){
+  const el=$('#insp');
+  if(selId==null||!sim.all[selId]){el.innerHTML=`<h2>Instruction inspector</h2><p class="hint" style="margin:0">Click any instruction chip to follow it through the pipeline.</p>`;return;}
+  const x=sim.all[selId], h=x.hist, cs=Object.keys(h).map(Number).sort((a,b)=>a-b);
+  const where=h[s.c]||(x.wb!=null&&x.wb<s.c?'retired':x.flushC&&x.flushC<=s.c?'flushed':'not fetched yet');
+  const r=s.reasons[x.id];
+  const deps=(x.prod||[]).filter(p=>p.p).map(p=>`R${p.r} from #${p.p.id+1}`).join(', ')||'none in flight';
+  el.innerHTML=`<h2>Instruction #${x.id+1} · I${x.pc+1}</h2>
+    <div class="mono" style="font-weight:700">${esc(x.I.text)}</div>
+    <dl><dt>Unit</dt><dd>${UNAME[x.type]} (${x.type==='BR'?1:cfg.lat[x.type]}-cycle latency)</dd>
+    <dt>Now</dt><dd>${esc(where)}${r?' · '+esc(r.m):''}</dd>
+    <dt>Waits on</dt><dd>${esc(deps)}</dd>
+    ${x.pdest?`<dt>Renamed</dt><dd>R${x.dest} → ${x.pdest}</dd>`:''}
+    ${x.cond&&cfg.bp!=='stall'?`<dt>Prediction</dt><dd>${x.pred?'taken':'not taken'}${x.wrong?'':' · actual '+(x.tr.taken?'taken':'not taken')+(x.mis?' (mispredicted)':' (correct)')}</dd>`:''}
+    ${x.wrong?`<dt>Path</dt><dd style="color:var(--bad)">Wrong path, flushed in cycle ${x.flushC}</dd>`:''}
+    <dt>Timeline</dt><dd class="mono" style="font-size:11px">${cs.map(c=>`<span style="${c===s.c?'font-weight:800;text-decoration:underline':''}">${c}:${h[c]}</span>`).join(' ')}</dd></dl>`;
+}
+
+/* ================= TIMING DIAGRAM ================= */
+function buildTiming(){
+  const N=sim.cycles, rows=sim.all.slice(0,260);
+  const uc={ALU:'var(--u-alu)',MUL:'var(--u-mul)',MEM:'var(--u-mem)',BR:'var(--u-br)'};
+  let h=`<table class="td"><thead><tr><th class="ins">Instruction</th>`;
+  for(let c=1;c<=N;c++) h+=`<th data-c="${c}">${c}</th>`;
+  h+=`</tr></thead><tbody>`;
+  rows.forEach(x=>{
+    h+=`<tr><th class="ins${x.flushC?' fl':''}">#${x.id+1} <span style="color:var(--muted)">I${x.pc+1}</span> ${esc(x.I.text)}</th>`;
+    for(let c=1;c<=N;c++){const s=x.hist[c]; if(!s){h+=`<td data-c="${c}"></td>`;continue;}
+      if(s[0]==='E'&&s!=='EX') h+=`<td data-c="${c}" class="s-EX" style="background:${uc[x.type]}">${s}</td>`;
+      else h+=`<td data-c="${c}" class="s-${s}">${({ST:'st',RB:'··',FL:'✕'})[s]||s}</td>`;}
+    h+='</tr>';
+  });
+  h+='</tbody></table>';
+  if(sim.all.length>260) h+=`<p class="hint" style="padding:8px">Showing the first 260 of ${sim.all.length} fetched instructions.</p>`;
+  $('#tdwrap').innerHTML=h;
+  $('#tdwrap').querySelectorAll('thead th[data-c]').forEach(th=>th.onclick=()=>{pause();go(+th.dataset.c,false);});
+}
+let lastMark=null;
+function markTiming(){
+  if(view!=='timing') return;
+  const w=$('#tdwrap'); w.querySelectorAll('.cur').forEach(e=>e.classList.remove('cur'));
+  if(!cur) return;
+  const cells=w.querySelectorAll(`[data-c="${cur}"]`); cells.forEach(e=>e.classList.add('cur'));
+  const th=cells[0]; if(th&&lastMark!==cur){ const L=th.offsetLeft, vw=w.clientWidth; if(L<w.scrollLeft+200||L>w.scrollLeft+vw-60) w.scrollLeft=L-vw/2; }
+  lastMark=cur;
+}
+
+/* ================= HAZARDS VIEW ================= */
+function renderHazards(){
+  const hz=staticHazards(prog); const n=prog.length, RH=26, top=14, textX=150, rightX=400, W=600;
+  const H=top*2+n*RH; const y=i=>top+i*RH+RH/2;
+  let svg=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Dependency arcs between instructions">`;
+  prog.forEach((I,i)=>{svg+=`<text x="${textX-8}" y="${y(i)+4}" text-anchor="end" class="m">I${i+1}</text><text x="${textX}" y="${y(i)+4}">${esc(I.text)}</text>`;});
+  const sty={RAW:['var(--raw)',''],WAR:['var(--war)','6 4'],WAW:['var(--waw)','2 3']};
+  hz.filter(h=>h.t!=='CTRL').forEach(h=>{
+    const [col,dash]=sty[h.t]; const d=Math.min(110,22+(h.j-h.i)*16);
+    const x0=h.t==='RAW'?rightX:textX-34, sgn=h.t==='RAW'?1:-1, xm=x0+sgn*d;
+    const y1=y(h.i)-3, y2=y(h.j)+3;
+    svg+=`<path d="M${x0} ${y1} C ${xm} ${y1}, ${xm} ${y2}, ${x0+sgn*4} ${y2}" fill="none" stroke="${col}" stroke-width="2" stroke-dasharray="${dash}" marker-end="url(#ar-${h.t})"/>`;
+    svg+=`<text x="${x0+sgn*(d*.75)}" y="${(y1+y2)/2+4}" text-anchor="middle" style="fill:${col};font-size:10px;font-weight:700">R${h.r}</text>`;
+  });
+  svg+=`<defs>${Object.entries(sty).map(([k,[c]])=>`<marker id="ar-${k}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${c}"/></marker>`).join('')}</defs></svg>`;
+  $('#arcs').innerHTML=svg;
+
+  // hazard table
+  const raw=t=>t==='RAW', rows=[];
+  const fx={
+    RAW:()=>cfg.fwd?['y','Forwarding on: result is passed straight from EX, so the wait is only the producer\'s latency.']:['n','No forwarding: the consumer waits until write-back. Turn on forwarding.'],
+    WAR:()=>cfg.rename?['y','Removed by register renaming.']:(cfg.ooo?['n','Can stall with out-of-order issue. Turn on renaming.']:['y','Harmless with in-order issue: reads happen in program order.']),
+    WAW:()=>cfg.rename?['y','Removed by register renaming.']:['n','Later write stalls until the earlier write finishes. Turn on renaming.'],
+    CTRL:()=>cfg.bp==='stall'?['n','Fetch stops until the branch resolves. Try branch prediction.']:['y',`${cfg.bp==='2bit'?'2-bit dynamic':'Static not-taken'} prediction keeps fetching. Wrong guesses are flushed.`]
+  };
+  const what={RAW:h=>`I${h.j+1} reads R${h.r}, which I${h.i+1} writes. It must wait for the value (true dependency).`,
+    WAR:h=>`I${h.j+1} writes R${h.r}, which earlier I${h.i+1} still reads. Must not overwrite it too early.`,
+    WAW:h=>`I${h.i+1} and I${h.j+1} both write R${h.r}. The final value must come from I${h.j+1}.`,
+    CTRL:h=>`Next instruction after I${h.i+1} is unknown until the branch is evaluated.`};
+  hz.forEach(h=>{const [ok,t]=fx[h.t](); rows.push(`<tr><td><span class="ty ${h.t}">${h.t==='CTRL'?'CONTROL':h.t}</span></td><td class="mono">${h.t==='CTRL'?`I${h.i+1} ${esc(prog[h.i].op)}`:`I${h.i+1} → I${h.j+1}`}</td><td class="mono">${h.r?'R'+h.r:''}</td><td>${what[h.t](h)}</td><td><span class="fix ${ok}">${ok==='y'?'handled':'causes stalls'}</span><div class="hint">${t}</div></td></tr>`);});
+  TYPES.forEach(t=>{const n=sim.stByType[t]; if(n) rows.push(`<tr><td><span class="ty STRUCT">STRUCTURAL</span></td><td class="mono">${UNAME[t]} unit</td><td></td><td>Instructions waited ${n} slot-cycle${n>1?'s':''} because all ${cfg.units[t]} ${UNAME[t]} unit${cfg.units[t]>1?'s were':' was'} busy.</td><td><span class="fix n">causes stalls</span><div class="hint">Add a ${UNAME[t]} unit${cfg.pipe||t==='ALU'||t==='BR'?'':' or turn on pipelined units'}.</div></td></tr>`);});
+  $('#hzTable').innerHTML=`<thead><tr><th>Type</th><th>Between</th><th>Reg</th><th>What happens</th><th>Status now</th></tr></thead><tbody>${rows.join('')||'<tr><td colspan="5">No hazards in this program.</td></tr>'}</tbody>`;
+
+  // stall bars
+  const S=sim.st, items=[['RAW (true data dependency)',S.RAW],['WAR (false dependency)',S.WAR],['WAW (false dependency)',S.WAW],['Structural (unit busy)',S.STRUCT],['Control (fetch waits for branch)',S.CTRL],['Flushed (mispredicted branch)',sim.flushedTotal],['In-order issue blocking',S.ORDER],['Issue width used up',S.WIDTH],['Memory ordering',S.MEMORD],['Issue queue full',S.FULL]];
+  bars($('#stallBars'),items.map(([l,v])=>({l,v,vl:v,tip:`${l}: ${v}`})));
+
+  // solution cards
+  const sol=[
+    ['Stall (pipeline interlock)',true,'The hardware detects the hazard and inserts bubbles until it clears. Always available, always correct, but slow.'],
+    ['Data forwarding',cfg.fwd,'A bypass path sends the EX result directly to the next instruction instead of waiting for write-back. Shortens RAW stalls.'],
+    ['Register renaming',cfg.rename,'Architectural registers (R0 to R15) are mapped to a larger set of physical registers (P#). WAR and WAW disappear because each write gets its own register.'],
+    ['Out-of-order issue',cfg.ooo,'Reservation stations hold waiting instructions. Any ready instruction may issue, so independent work fills the slots a stalled one would waste.'],
+    ['Branch prediction + flush',cfg.bp!=='stall','Fetch keeps going on the guessed path. If the guess is wrong, every younger instruction is flushed and fetch restarts. 2-bit counters learn loop behaviour.'],
+    ['More or pipelined units',cfg.pipe,`Structural hazards shrink with more copies of a busy unit (now ${cfg.units.ALU} ALU, ${cfg.units.MUL} MUL, ${cfg.units.MEM} LSU) or by pipelining multi-cycle units.`],
+    ['In-order commit (reorder buffer)',true,'Results are written back in program order, so a flush never leaves wrong values in registers (precise state).']
+  ];
+  $('#sols').innerHTML=sol.map(([t,on,p])=>`<div class="sol"><h3>${t}<span class="st ${on?'on':'off'}">${on?'ON':'OFF'}</span></h3><p>${p}</p></div>`).join('');
+}
+
+/* ================= PERFORMANCE VIEW ================= */
+function runWith(over){return simulate(prog,trace,Object.assign(JSON.parse(JSON.stringify(cfg)),over));}
+function renderPerf(){
+  const widths=[1,2,4,8].map(w=>({w,r:runWith({width:w})}));
+  const base=widths[0].r.cycles;
+  const me=sim, sp=base/me.cycles;
+  const brAcc=me.branches?(1-me.mispred/me.branches):null;
+  $('#perfStats').innerHTML=[
+    ['Total cycles',me.cycles],['Instructions',me.committed],['Throughput (IPC)',me.ipc.toFixed(2)],
+    ['Speedup vs 1-issue',sp.toFixed(2)+'×'],['Unit utilization',pct(me.util)],['Issue slot use',pct(me.issueUtil)],
+    ['Branch accuracy',brAcc==null?'n/a':pct(brAcc)]
+  ].map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  bars($('#wBars'),widths.map(({w,r})=>({l:`${w}-issue${w===1?' (scalar)':''}`,v:r.cycles,vl:`${r.cycles} cyc · ${(base/r.cycles).toFixed(2)}×`,cur:w===cfg.width,tip:`${w}-issue: ${r.cycles} cycles, IPC ${r.ipc.toFixed(2)}, speedup ${(base/r.cycles).toFixed(2)}×`})));
+  $('#wTable').innerHTML=`<thead><tr><th>Issue width</th><th>Cycles</th><th>IPC</th><th>Speedup</th><th>Ideal</th><th>Unit util.</th><th>Issue slot use</th></tr></thead><tbody>`+
+    widths.map(({w,r})=>`<tr class="${w===cfg.width?'cur':''}"><td>${w}</td><td>${r.cycles}</td><td>${r.ipc.toFixed(2)}</td><td>${(base/r.cycles).toFixed(2)}×</td><td>${w}×</td><td>${pct(r.util)}</td><td>${pct(r.issueUtil)}</td></tr>`).join('')+'</tbody>';
+  const none={fwd:false,rename:false,ooo:false,pipe:false,bp:'stall'};
+  const hasBr=prog.some(I=>I.kind==='B');
+  const solCfgs=[['No solutions (stall only)',none],['+ Forwarding',{...none,fwd:true}],['+ Renaming',{...none,rename:true}],['+ Out-of-order',{...none,ooo:true}],['+ Pipelined units',{...none,pipe:true}]];
+  if(hasBr) solCfgs.push(['+ 2-bit prediction',{...none,bp:'2bit'}]);
+  solCfgs.push(['All solutions',{fwd:true,rename:true,ooo:true,pipe:true,bp:'2bit'}]);
+  const sr=solCfgs.map(([l,o])=>({l,r:runWith(o)}));
+  $('#solHint').textContent=`At ${cfg.width}-issue, each bar turns on one solution by itself, starting from a pipeline that can only stall. Fewer cycles is better.`;
+  bars($('#sBars'),sr.map(({l,r})=>({l,v:r.cycles,vl:`${r.cycles} cyc · IPC ${r.ipc.toFixed(2)}`,cur:l==='All solutions',tip:`${l}: ${r.cycles} cycles`})));
+  bars($('#uBars'),me.units.map(u=>({l:u.name,v:me.unitBusy[u.name]/me.cycles,vl:pct(me.unitBusy[u.name]/me.cycles),max:1,tip:`${u.name}: busy ${me.unitBusy[u.name]} of ${me.cycles} cycles`})),1);
+  // insight
+  const w4=widths.find(x=>x.w===4).r; const S=me.st;
+  const causes=[['RAW dependencies',S.RAW],['WAR/WAW false dependencies',S.WAR+S.WAW],['structural conflicts',S.STRUCT],['branches',S.CTRL+me.flushedTotal],['in-order blocking',S.ORDER]].sort((a,b)=>b[1]-a[1]);
+  const all=sr[sr.length-1].r, nn=sr[0].r;
+  $('#insight').innerHTML=`Going from 1-issue to 4-issue gives <b>${(base/w4.cycles).toFixed(2)}×</b> speedup, not the ideal 4×. `+
+    (causes[0][1]?`In the current setup the biggest limit is <b>${causes[0][0]}</b> (${causes[0][1]} stall slots). `:'This program has almost no hazards, so it scales well with issue width. ')+
+    `Turning on every hazard solution cuts the run from <b>${nn.cycles}</b> to <b>${all.cycles}</b> cycles at ${cfg.width}-issue. `+
+    `Extra issue width only helps when the program has independent instructions (instruction-level parallelism) and the hardware has enough units to run them.`;
+}
+function bars(el,items,fixedMax){
+  const mx=fixedMax||Math.max(1,...items.map(i=>i.v));
+  el.innerHTML=items.map(i=>`<div class="bar-r${i.cur?' cur':''}" data-tip="${esc(i.tip||'')}"><span class="lb">${esc(i.l)}</span><span class="tr"><span class="fl" style="display:block;width:${(i.v/mx*100).toFixed(1)}%"></span></span><span class="vl">${esc(String(i.vl))}</span></div>`).join('');
+  el.querySelectorAll('.bar-r').forEach(r=>{r.onmouseenter=e=>showTip(e,esc(r.dataset.tip));r.onmousemove=moveTip;r.onmouseleave=hideTip;});
+}
+const tip=$('#tip');
+function showTip(e,html){tip.innerHTML=html;tip.classList.add('on');moveTip(e);}
+function moveTip(e){const x=Math.min(e.clientX+14,innerWidth-310), y=e.clientY+16; tip.style.left=x+'px'; tip.style.top=y+'px';}
+function hideTip(){tip.classList.remove('on');}
+
+/* ================= BOOT ================= */
+try{const v=localStorage.getItem('ss-view'); if(v&&v!=='live') document.querySelector(`.tabs button[data-v="${v}"]`)?.click();}catch(e){}
+sel.value='Hazard showcase'; $('#src').value=SAMPLES['Hazard showcase'];
+syncControls(); load(); go(5,false);
+</script>
+
+</body></html>
