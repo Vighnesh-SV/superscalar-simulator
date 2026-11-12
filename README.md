@@ -1,5 +1,7 @@
 # Superscalar Scheduling Simulator
 
+**Live demo:** https://vighnesh-sv.github.io/superscalar-simulator/
+
 Computer Architecture and Organization project (Unit 3: Pipeline Processing).
 
 A cycle-by-cycle simulator of a superscalar processor. It takes a short assembly program, finds data dependencies (RAW, WAR, WAW) and resource conflicts, schedules the instructions on multiple execution units, and compares single-issue with multi-issue execution (total cycles, IPC, utilization, speedup).
