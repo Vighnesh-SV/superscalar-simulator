@@ -27,3 +27,23 @@ HTML5, CSS3 and vanilla JavaScript in one file. Animations use the Web Animation
 ## Planned features
 
 Planned features are tracked in a separate document shared with the team.
+
+## Project structure
+
+- `index.html` - the full simulator (single file, plain HTML/CSS/JavaScript, no build step)
+- `docs/Planned-Features.docx` - planned next features (error mode, hazard diagnosis panel)
+
+## Working on it (for teammates)
+
+```bash
+git clone https://github.com/Vighnesh-SV/superscalar-simulator.git
+cd superscalar-simulator
+# open index.html in any browser - that's it, no install needed
+```
+
+Workflow:
+1. `git pull` before you start.
+2. Make a branch: `git checkout -b your-feature`
+3. Edit `index.html`, refresh the browser to test.
+4. `git add . && git commit -m "what you changed"` then `git push -u origin your-feature`
+5. Open a Pull Request on GitHub. Once merged into `main`, the live demo updates automatically.
