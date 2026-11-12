@@ -5,3 +5,8 @@
 *.tmp
 Thumbs.db
 .DS_Store
+
+__pycache__/
+.pytest_cache/
+*.db
+.venv/

@@ -257,6 +257,7 @@ table.cmp{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-nume
     <span class="tag on">Data, control &amp; structural hazards</span>
     <span class="tag on">Branch prediction</span>
     <span class="tag">Pipeline performance</span>
+    <span class="tag" id="engine" title="Where the simulation is computed">Engine: in-browser</span>
   </div>
 </header>
 
@@ -278,7 +279,17 @@ table.cmp{border-collapse:collapse;font-size:12.5px;width:100%;font-variant-nume
       <textarea id="src" spellcheck="false" aria-label="Assembly program"></textarea>
       <div class="row" style="margin-top:8px"><button class="btn primary" id="bRun">Run program</button><span class="hint">Ctrl+Enter</span></div>
       <div class="err" id="err" hidden></div>
+      <div id="beTools" hidden>
+        <div class="row" style="margin-top:8px"><button class="btn" id="bCsv">Download report (CSV)</button></div>
+        <div class="row" style="margin-top:8px"><input id="expName" type="text" maxlength="100" placeholder="Name this run" aria-label="Name for saved run" style="flex:1;min-width:0;border:1px solid var(--line);border-radius:8px;padding:7px 9px;font:inherit;background:var(--surface);color:var(--ink)"><button class="btn" id="bSave">Save run</button></div>
+      </div>
       <p class="hint" style="margin:8px 0 0">ADD SUB AND OR XOR SLT · ADDI SUBI ANDI ORI · MUL DIV · LW/SW Rx, off(Ry) · BEQ BNE BLT · J · NOP · HALT. Registers R0–R15 (R0 is always 0). Memory word <span class="mono">k</span> starts as k+1.</p>
+    </section>
+
+    <section class="panel" id="expPanel" hidden>
+      <h3>Saved runs</h3>
+      <div class="hint" id="expHint">Saved on the backend (SQLite). Click a run to load it again.</div>
+      <div id="expList"></div>
     </section>
 
     <section class="panel">
@@ -781,18 +792,72 @@ function play(){ if(cur>=sim.cycles) go(0,false); $('#playTxt').textContent='Pau
 function pause(){ clearInterval(timer); timer=null; $('#playTxt').textContent='Play'; $('#playIco').innerHTML='<path d="M4 2v12l10-6z"/>'; }
 
 /* ================= RUN ================= */
-function load(){
+/* ================= BACKEND =================
+   When the page is served by the Python backend, every run is computed by POST /api/simulate.
+   Opened as a plain file (or on GitHub Pages) it falls back to the same engine in JavaScript. */
+let API=null, cmp=null, reqN=0;
+const post=(p,body)=>fetch(API+p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+function setEngine(){
+  const on=API!==null, t=$('#engine');
+  t.textContent=on?'Engine: Python backend':'Engine: in-browser'; t.classList.toggle('on',on);
+  $('#beTools').hidden=!on; $('#expPanel').hidden=!on;
+}
+async function detectBackend(){
+  const base=location.protocol.startsWith('http')?'':'http://127.0.0.1:8000';
+  try{const r=await fetch(base+'/api/health',{signal:AbortSignal.timeout(1500)}); if(r.ok&&(await r.json()).engine==='python') API=base;}catch(e){}
+  setEngine(); if(API!==null) loadExperiments();
+}
+function hydrate(d){
+  prog=d.prog; trace=d.trace; trunc=d.trunc; cmp=d.compare||null;
+  const s=d.sim;
+  s.all.forEach(x=>{x.I=prog[x.pc]; x.seq=x.id; if(x.prod) x.prod.forEach(p=>p.p=p.p==null?null:s.all[p.p]);});
+  return s;
+}
+const apiErrors=d=>Array.isArray(d.detail)?d.detail.map(x=>x.msg):(d.detail&&d.detail.errors)||['The backend rejected the request.'];
+async function loadExperiments(){
+  try{
+    const list=await (await fetch(API+'/api/experiments')).json();
+    $('#expList').innerHTML=list.length?list.map(x=>`<div class="row" style="margin-top:6px;gap:6px"><button class="btn" data-open="${x.id}" style="flex:1;min-width:0;justify-content:space-between;font-weight:400"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600">${esc(x.name)}</span><span class="mono hint" style="white-space:nowrap">${x.config.width}-issue · ${x.cycles} cyc · ${x.speedup.toFixed(2)}×</span></button><button class="btn" data-del="${x.id}" title="Delete this saved run" aria-label="Delete ${esc(x.name)}">✕</button></div>`).join(''):'<div class="hint" style="margin-top:6px">Nothing saved yet.</div>';
+    $('#expList').querySelectorAll('[data-open]').forEach(b=>b.onclick=async()=>{
+      const x=await (await fetch(API+'/api/experiments/'+b.dataset.open)).json();
+      $('#src').value=x.source; cfg=x.config; syncControls(); load();
+    });
+    $('#expList').querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{await fetch(API+'/api/experiments/'+b.dataset.del,{method:'DELETE'}); loadExperiments();});
+  }catch(e){}
+}
+$('#bSave').onclick=async()=>{
+  const name=$('#expName').value.trim()||`${$('#sample').value} · ${cfg.width}-issue`;
+  const r=await post('/api/experiments',{name,source:$('#src').value,config:cfg});
+  if(r.ok){$('#expName').value=''; loadExperiments();}
+};
+$('#bCsv').onclick=async()=>{
+  const r=await post('/api/report',{source:$('#src').value,config:cfg}); if(!r.ok) return;
+  const a=document.createElement('a'); a.href=URL.createObjectURL(await r.blob()); a.download='simulation-report.csv'; a.click(); URL.revokeObjectURL(a.href);
+};
+
+async function load(){
   pause();
+  if(API!==null){ selId=null; await rerun(true); return; }
   const r=parse($('#src').value); const e=$('#err');
   if(r.errs.length){e.hidden=false;e.textContent=r.errs.join('\n');return;}
   prog=r.prog; const ex=execute(prog); trace=ex.trace; trunc=ex.trunc;
   e.hidden=!trunc; e.textContent=trunc?'The program ran for 400 instructions without finishing, so the simulation stops there. Check your loop condition.':'';
   selId=null; buildBoard(); rerun(true);
 }
-function rerun(fresh){
-  if(!prog.length) return;
+async function rerun(fresh){
   const keep=fresh?0:cur;
-  sim=simulate(prog,trace,cfg);
+  if(API!==null){
+    const n=++reqN, e=$('#err'); let r,d;
+    try{ r=await post('/api/simulate',{source:$('#src').value,config:cfg}); d=await r.json(); }
+    catch(err){ if(n!==reqN) return; API=null; cmp=null; setEngine(); return load(); }   // backend went away: use the browser engine
+    if(n!==reqN) return;
+    if(!r.ok){e.hidden=false; e.textContent=apiErrors(d).join('\n'); return;}
+    sim=hydrate(d);
+    e.hidden=!trunc; e.textContent=trunc?'The program ran for 400 instructions without finishing, so the simulation stops there. Check your loop condition.':'';
+  }else{
+    if(!prog.length) return;
+    sim=simulate(prog,trace,cfg);
+  }
   chipEls.forEach(el=>el.remove()); chipEls.clear(); buildBoard();
   $('#scrub').max=sim.cycles; $('#cTot').textContent=sim.cycles;
   buildTiming(); renderHazards(); renderPerf();
@@ -1018,7 +1083,7 @@ function renderHazards(){
 /* ================= PERFORMANCE VIEW ================= */
 function runWith(over){return simulate(prog,trace,Object.assign(JSON.parse(JSON.stringify(cfg)),over));}
 function renderPerf(){
-  const widths=[1,2,4,8].map(w=>({w,r:runWith({width:w})}));
+  const widths=cmp?cmp.widths:[1,2,4,8].map(w=>({w,r:runWith({width:w})}));
   const base=widths[0].r.cycles;
   const me=sim, sp=base/me.cycles;
   const brAcc=me.branches?(1-me.mispred/me.branches):null;
@@ -1035,7 +1100,7 @@ function renderPerf(){
   const solCfgs=[['No solutions (stall only)',none],['+ Forwarding',{...none,fwd:true}],['+ Renaming',{...none,rename:true}],['+ Out-of-order',{...none,ooo:true}],['+ Pipelined units',{...none,pipe:true}]];
   if(hasBr) solCfgs.push(['+ 2-bit prediction',{...none,bp:'2bit'}]);
   solCfgs.push(['All solutions',{fwd:true,rename:true,ooo:true,pipe:true,bp:'2bit'}]);
-  const sr=solCfgs.map(([l,o])=>({l,r:runWith(o)}));
+  const sr=cmp?cmp.solutions:solCfgs.map(([l,o])=>({l,r:runWith(o)}));
   $('#solHint').textContent=`At ${cfg.width}-issue, each bar turns on one solution by itself, starting from a pipeline that can only stall. Fewer cycles is better.`;
   bars($('#sBars'),sr.map(({l,r})=>({l,v:r.cycles,vl:`${r.cycles} cyc · IPC ${r.ipc.toFixed(2)}`,cur:l==='All solutions',tip:`${l}: ${r.cycles} cycles`})));
   bars($('#uBars'),me.units.map(u=>({l:u.name,v:me.unitBusy[u.name]/me.cycles,vl:pct(me.unitBusy[u.name]/me.cycles),max:1,tip:`${u.name}: busy ${me.unitBusy[u.name]} of ${me.cycles} cycles`})),1);
@@ -1061,7 +1126,7 @@ function hideTip(){tip.classList.remove('on');}
 /* ================= BOOT ================= */
 try{const v=localStorage.getItem('ss-view'); if(v&&v!=='live') document.querySelector(`.tabs button[data-v="${v}"]`)?.click();}catch(e){}
 sel.value='Hazard showcase'; $('#src').value=SAMPLES['Hazard showcase'];
-syncControls(); load(); go(5,false);
+syncControls(); detectBackend().then(async()=>{ await load(); if(sim) go(5,false); });
 </script>
 
 </body></html>

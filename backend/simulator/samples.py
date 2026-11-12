@@ -1,0 +1,11 @@
+"""Sample programs (same as in the web UI)."""
+
+SAMPLES = {
+    "Hazard showcase": "; Every kind of data hazard in 8 instructions\nLW   R1, 0(R0)     ; I1 load from memory\nADD  R2, R1, R1    ; I2 RAW: needs R1 from the load\nMUL  R3, R2, R5    ; I3 RAW: needs R2\nMUL  R6, R7, R8    ; I4 structural: only 1 multiplier\nSUB  R5, R9, R10   ; I5 WAR: overwrites R5 before I3 reads it\nADD  R2, R11, R12  ; I6 WAW: writes R2 again (after I2)\nADD  R13, R3, R6   ; I7 RAW on R3 and R6\nSW   R13, 10(R0)   ; I8 store result",
+    "Intro example": "LW   R1, 0(R2)\nADD  R3, R1, R4    ; RAW on R1\nMUL  R5, R6, R7    ; independent\nSUB  R8, R6, R9    ; independent\nADD  R10, R5, R8   ; RAW on R5, R8\nADD  R3, R11, R12  ; WAW with I2",
+    "Array sum loop (branches)": "; sum = a[0] + ... + a[7]\n      ADDI R1, R0, 0     ; i = 0\n      ADDI R2, R0, 8     ; n = 8\n      ADDI R3, R0, 0     ; sum = 0\nloop: LW   R4, 0(R1)     ; a[i]\n      ADD  R3, R3, R4    ; sum += a[i]\n      ADDI R1, R1, 1     ; i++\n      BNE  R1, R2, loop  ; repeat while i != n\n      SW   R3, 20(R0)    ; store sum",
+    "Dot product loop": "; dot = a[i]*b[i] summed over 6 elements\n      ADDI R1, R0, 0      ; i = 0\n      ADDI R2, R0, 6      ; n = 6\n      ADDI R3, R0, 0      ; dot = 0\nloop: LW   R4, 0(R1)      ; a[i]\n      LW   R5, 20(R1)     ; b[i]\n      MUL  R6, R4, R5\n      ADD  R3, R3, R6\n      ADDI R1, R1, 1\n      BNE  R1, R2, loop\n      SW   R3, 40(R0)",
+    "If/else in a loop": "; alternating branch: hard for a predictor\n      ADDI R1, R0, 0\n      ADDI R2, R0, 8\nloop: ANDI R3, R1, 1     ; R3 = i is odd?\n      BEQ  R3, R0, even\n      ADDI R4, R4, 3     ; odd path\n      J    next\neven: ADDI R5, R5, 2     ; even path\nnext: ADDI R1, R1, 1\n      BNE  R1, R2, loop",
+    "Independent ops (high ILP)": "; no dependencies at all: scales with issue width\nADD  R1, R2, R3\nSUB  R4, R5, R6\nLW   R7, 0(R0)\nMUL  R8, R2, R5\nOR   R9, R3, R6\nADDI R10, R2, 7\nLW   R11, 4(R0)\nAND  R12, R5, R3\nMUL  R13, R6, R3\nXOR  R14, R2, R6\nADDI R15, R3, 9\nSUB  R1, R6, R5",
+    "Dependency chain (no ILP)": "; every instruction needs the previous result\nADDI R1, R0, 5\nADD  R2, R1, R1\nMUL  R3, R2, R1\nSUB  R4, R3, R2\nADD  R5, R4, R3\nMUL  R6, R5, R4\nADDI R7, R6, 1\nSW   R7, 0(R0)",
+}
